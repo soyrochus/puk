@@ -1,0 +1,25 @@
+[project]
+name = "puk"
+version = "0.1.0"
+description = "Puk, who can’t resist poking around and making things better"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click",
+    "pydantic>=2.0",
+    "rich",
+    "github-copilot-sdk",
+]
+
+[project.scripts]
+puk = "puk.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
