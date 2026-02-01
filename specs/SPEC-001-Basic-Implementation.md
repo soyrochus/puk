@@ -155,10 +155,10 @@ Confirm policy:
 
 Tools:
 
-* `tools.filesystem = true/false`
-* `tools.terminal = true/false`
 * `tools.python_exec = true/false`
-* `tools.mcp = {...}`
+* `tools.user_io = true/false`
+* `tools.mcp = true/false`
+* `tools.builtin_excluded = [...]` (optional list of SDK tools to disable)
 
 ## 6. Workspace scoping rules
 
@@ -212,10 +212,9 @@ The command set is intentionally small; most interaction happens through normal 
    * handles streaming events 
 5. Tool registry:
 
-   * filesystem tools
-   * terminal tools
-   * python execution tools
-   * user I/O tools (confirm/prompt/select)
+   * SDK built-in tools (filesystem, terminal) - provided by Copilot SDK
+   * python execution tools - PUK-provided isolated venv execution
+   * user I/O tools (confirm/prompt/select) - PUK-provided
 6. Action queue + change staging
 7. Run report generator (JSON + human-readable)
 
@@ -244,28 +243,18 @@ PUK must provide tools with explicit schemas (Pydantic models suggested).
 
 These are used by the agent to request clarifications and confirmations. 
 
-### 9.2 Filesystem tools (default enabled, guarded)
+### 9.2 Filesystem and terminal tools (SDK built-in)
 
-* `list_directory(path, pattern, limit)`
-* `read_file(path, max_bytes, redact_secrets)`
-* `write_file(path, content, mode)` (mode: create/overwrite/patch)
-* `delete_path(path, recursive)`
-* `move_path(src, dst)`
-* `search_text(query, globs, max_hits)`
+PUK delegates filesystem and terminal operations to the Copilot SDK's built-in tools:
 
-Policy requirements:
+* `Read` - read file contents
+* `Edit` - modify files
+* `List directory` - list directory contents
+* `bash` - execute shell commands
+* `grep` - search within files
+* `glob` - find files by pattern
 
-* Every tool checks workspace scoping.
-* `write/delete/move` require confirmation unless `--confirm` or config overrides.
-
-### 9.3 Terminal tool (optional but recommended)
-
-* `run_command(cmd, cwd, timeout, env_allowlist, shell=false)`
-
-Policy requirements:
-
-* Default denylist for obviously destructive patterns unless confirmed (e.g., `rm -rf`, disk formatting, credential exfil).
-* Enforce `cwd` within root unless free mode.
+These tools are provided by the SDK and respect its built-in safety mechanisms. PUK can optionally disable specific built-in tools via the `tools.builtin_excluded` configuration.
 
 ### 9.4 Python generation and execution tools (recommended)
 
@@ -495,38 +484,20 @@ CLI override semantics:
 
 #### 15.2.6 Tools policy
 
-Tools exist only if enabled here; this is the primary safety mechanism.
+PUK provides custom tools for Python execution and user I/O. Filesystem and terminal operations use the SDK's built-in tools.
 
 ```toml
 [tools]
-filesystem = true
-terminal = true
-python_exec = true
-mcp = false
-user_io = true
-```
-
-Tool-specific subpolicy:
-
-```toml
-[tools.filesystem_policy]
-allow_delete = false             # if true, delete is allowed (still confirmed unless safety overrides)
-allow_overwrite = true
-staging_mode = "diff-first"      # "diff-first" | "direct"
-max_write_files = 200            # per run
-```
-
-```toml
-[tools.terminal_policy]
-shell = false                    # if false, run commands as argv arrays
-timeout_seconds = 300
-allowlist = ["git", "python", "pytest", "ruff", "mypy", "make"]
-denylist = ["rm", "dd", "mkfs", "shutdown", "reboot", "curl", "wget"]
+python_exec = true               # PUK's isolated venv Python execution
+user_io = true                   # PUK's user interaction tools
+mcp = false                      # MCP tool passthrough
+builtin_excluded = []            # SDK tools to disable, e.g. ["bash"]
 ```
 
 Notes:
 
-* If you allow `curl/wget`, you are implicitly allowing exfiltration and remote code download; that should require explicit policy and confirmation.
+* `builtin_excluded` allows disabling specific SDK built-in tools (e.g., `["bash"]` to prevent shell access).
+* Filesystem and terminal operations are handled by SDK built-in tools (`Read`, `Edit`, `bash`, etc.).
 
 #### 15.2.7 Python execution (venv isolation)
 
@@ -609,21 +580,10 @@ redact_secrets = true
 paranoid_reads = false
 
 [tools]
-filesystem = true
-terminal = true
 python_exec = true
-mcp = false
 user_io = true
-
-[tools.filesystem_policy]
-allow_delete = false
-allow_overwrite = true
-staging_mode = "diff-first"
-
-[tools.terminal_policy]
-timeout_seconds = 300
-allowlist = ["git", "python", "pytest", "ruff", "mypy"]
-denylist = ["rm", "dd", "mkfs", "shutdown", "reboot", "curl", "wget"]
+mcp = false
+# builtin_excluded = ["bash"]  # optionally disable SDK tools
 
 [python]
 venv_mode = "local"
@@ -636,14 +596,11 @@ exec_timeout_seconds = 300
 
 ### 15.4 Required implementation behaviors tied to schema
 
-* PUK must be able to print the “effective config” and show provenance (global/local/cli) via `/config`.
+* PUK must be able to print the "effective config" and show provenance (global/local/cli) via `/config`.
 * Any attempt to act outside root while `workspace.allow_outside_root=false` must fail with a policy violation exit code.
-* Any mutating action must either:
-
-  * be staged and shown as diff (if `staging_mode="diff-first"`), then confirmed, or
-  * be confirmed directly before execution (if staging is disabled)
+* Mutating actions use SDK built-in tools which have their own confirmation mechanisms.
 * In `--non-interactive` mode:
 
-  * missing information is an immediate error (exit code “missing info”)
+  * missing information is an immediate error (exit code "missing info")
   * confirmations cannot be prompted; behavior depends on `--confirm` and config.
 

@@ -70,33 +70,13 @@ redact_secrets = true
 paranoid_reads = false
 
 [tools]
-filesystem = true
-terminal = true
+# Enable Puk's custom tools (python_exec runs in isolated venv, user_io for prompts).
 python_exec = true
-mcp = false
 user_io = true
-# Disable built-in Copilot tools so only PUK tools are used.
-builtin_excluded = ["view", "edit", "bash"]
-
-[tools.filesystem_policy]
-# Allow deletes at all (still requires confirmation unless --confirm).
-allow_delete = false
-# Allow overwriting existing files.
-allow_overwrite = true
-# "diff-first" stages changes and shows diffs; "direct" writes immediately.
-staging_mode = "diff-first"
-# Limit number of files that can be written in a single run.
-max_write_files = 200
-
-[tools.terminal_policy]
-# If false, shell execution is blocked.
-shell = false
-# Default command timeout (seconds).
-timeout_seconds = 300
-# Allowed commands (first token must be in list).
-allowlist = ["git", "python", "pytest", "ruff", "mypy", "make"]
-# Denied commands (checked before allowlist).
-denylist = ["rm", "dd", "mkfs", "shutdown", "reboot", "curl", "wget"]
+# Enable MCP tool passthrough.
+mcp = false
+# Optionally disable specific built-in Copilot tools (empty by default).
+# Example: builtin_excluded = ["bash"]  # to disable shell access
 
 [python]
 # Virtualenv isolation strategy.

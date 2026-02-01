@@ -43,13 +43,12 @@ def _format_config(cfg: ConfigLoadResult) -> str:
 def _format_tools(cfg: ConfigLoadResult) -> str:
     tools = cfg.config.tools
     lines = [
-        f"filesystem={tools.filesystem}",
-        f"terminal={tools.terminal}",
         f"python_exec={tools.python_exec}",
         f"mcp={tools.mcp}",
         f"user_io={tools.user_io}",
-        f"filesystem_policy.staging_mode={tools.filesystem_policy.staging_mode}",
     ]
+    if tools.builtin_excluded:
+        lines.append(f"builtin_excluded={tools.builtin_excluded}")
     return "\n".join(lines)
 
 

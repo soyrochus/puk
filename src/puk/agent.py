@@ -24,8 +24,6 @@ class AgentContext:
 
 def build_system_prompt(config: PukConfig, root: str, tool_names: list[str] | None = None) -> str:
     safety = config.safety
-    tools_policy = config.tools
-    staging_mode = tools_policy.filesystem_policy.staging_mode
     prompt = f"""You are the PUK agent.
 
 Workspace root: {root}
@@ -36,8 +34,6 @@ Confirmation rules:
 - confirm_commands={safety.confirm_commands}
 - confirm_installs={safety.confirm_installs}
 - confirm_mcp={safety.confirm_mcp}
-
-Staging policy: {staging_mode}
 
 Tool usage etiquette:
 - Use tools for any filesystem, command, or environment action.

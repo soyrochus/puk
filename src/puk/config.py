@@ -83,33 +83,11 @@ class SafetyConfig(BaseModel):
     paranoid_reads: bool = False
 
 
-class ToolsPolicyConfig(BaseModel):
-    allow_delete: bool = False
-    allow_overwrite: bool = True
-    staging_mode: Literal["diff-first", "direct"] = "diff-first"
-    max_write_files: int = 200
-
-
-class TerminalPolicyConfig(BaseModel):
-    shell: bool = False
-    timeout_seconds: int = 300
-    allowlist: list[str] = Field(
-        default_factory=lambda: ["git", "python", "pytest", "ruff", "mypy", "make"]
-    )
-    denylist: list[str] = Field(
-        default_factory=lambda: ["rm", "dd", "mkfs", "shutdown", "reboot", "curl", "wget"]
-    )
-
-
 class ToolsConfig(BaseModel):
-    filesystem: bool = True
-    terminal: bool = True
     python_exec: bool = True
     mcp: bool = False
     user_io: bool = True
-    builtin_excluded: list[str] = Field(default_factory=lambda: ["view", "edit", "bash"])
-    filesystem_policy: ToolsPolicyConfig = Field(default_factory=ToolsPolicyConfig)
-    terminal_policy: TerminalPolicyConfig = Field(default_factory=TerminalPolicyConfig)
+    builtin_excluded: list[str] = Field(default_factory=list)
 
 
 class PythonConfig(BaseModel):
