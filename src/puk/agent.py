@@ -22,7 +22,7 @@ class AgentContext:
     confirm_mode: str
 
 
-def build_system_prompt(config: PukConfig, root: str) -> str:
+def build_system_prompt(config: PukConfig, root: str, tool_names: list[str] | None = None) -> str:
     safety = config.safety
     tools_policy = config.tools
     staging_mode = tools_policy.filesystem_policy.staging_mode
@@ -49,6 +49,13 @@ Tool usage etiquette:
         if path.exists() and path.is_file():
             extra = path.read_text(errors="ignore")
             prompt = f"{prompt}\\n{extra}"
+    if tool_names:
+        prompt = (
+            prompt
+            + "\nAvailable tools (use only these): "
+            + ", ".join(sorted(tool_names))
+            + "\n"
+        )
     return prompt
 
 
@@ -72,18 +79,28 @@ class PukAgent:
 
     async def start(self) -> None:
         await self.client.start()
+        tool_names = [tool.name for tool in self.tools]
+        if not tool_names:
+            tool_names = None
         session_config: dict[str, Any] = {
             "model": self.config.llm.model,
             "streaming": self.config.core.streaming,
             "tools": self.tools,
-            "systemMessage": {"content": build_system_prompt(self.config, self.config.workspace.root)},
-            "infiniteSessions": {
+            "system_message": {
+                "mode": "append",
+                "content": build_system_prompt(
+                    self.config, self.config.workspace.root, tool_names=tool_names
+                ),
+            },
+            "infinite_sessions": {
                 "enabled": self.config.session.infinite,
-                "backgroundCompactionThreshold": self.config.session.compaction_threshold,
+                "background_compaction_threshold": self.config.session.compaction_threshold,
             },
         }
+        if self.config.tools.builtin_excluded:
+            session_config["excluded_tools"] = self.config.tools.builtin_excluded
         if self.config.mcp.enabled and self.config.tools.mcp:
-            session_config["mcpServers"] = {
+            session_config["mcp_servers"] = {
                 name: server.model_dump() for name, server in self.config.mcp.servers.items()
             }
         self.session = await self.client.create_session(session_config)
@@ -131,6 +148,8 @@ class PukAgent:
                 "Consider retrying or increasing session.response_timeout_seconds.",
                 "warning",
             )
+        except Exception as exc:
+            await self.io.display(f"Session error: {exc}", "error")
 
     async def plan(self, prompt: str) -> str:
         system_prompt = "Provide a step-by-step plan only. Do not call tools."

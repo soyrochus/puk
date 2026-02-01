@@ -107,6 +107,7 @@ class ToolsConfig(BaseModel):
     python_exec: bool = True
     mcp: bool = False
     user_io: bool = True
+    builtin_excluded: list[str] = Field(default_factory=lambda: ["view", "edit", "bash"])
     filesystem_policy: ToolsPolicyConfig = Field(default_factory=ToolsPolicyConfig)
     terminal_policy: TerminalPolicyConfig = Field(default_factory=TerminalPolicyConfig)
 

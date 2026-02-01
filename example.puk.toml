@@ -75,6 +75,8 @@ terminal = true
 python_exec = true
 mcp = false
 user_io = true
+# Disable built-in Copilot tools so only PUK tools are used.
+builtin_excluded = ["view", "edit", "bash"]
 
 [tools.filesystem_policy]
 # Allow deletes at all (still requires confirmation unless --confirm).

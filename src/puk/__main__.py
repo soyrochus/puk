@@ -14,12 +14,6 @@ from .errors import MissingInfoError, PukError, PolicyViolationError
 from .reports import RunReport, write_report
 from .repl import run_repl
 from .staging import StagingManager
-from .tools import (
-    create_filesystem_tools,
-    create_python_tools,
-    create_terminal_tool,
-    create_user_io_tools,
-)
 from .ui import NonInteractiveIO, PlainIO, TuiIO
 from .workspace import Workspace
 
@@ -140,53 +134,6 @@ async def async_main(
     staging = StagingManager()
 
     tools: list = []
-    if cfg.config.tools.user_io:
-        tools.extend(create_user_io_tools(io))
-    if cfg.config.tools.filesystem:
-        tools.extend(
-            create_filesystem_tools(
-                workspace,
-                staging,
-                io,
-                report,
-                confirm_mutations=cfg.config.safety.confirm_mutations,
-                allow_delete=cfg.config.tools.filesystem_policy.allow_delete,
-                allow_overwrite=cfg.config.tools.filesystem_policy.allow_overwrite,
-                staging_mode=cfg.config.tools.filesystem_policy.staging_mode,
-                max_write_files=cfg.config.tools.filesystem_policy.max_write_files,
-                redact_secrets_default=cfg.config.safety.redact_secrets,
-                dry_run=dry_run,
-                paranoid_reads=cfg.config.safety.paranoid_reads,
-            )
-        )
-    if cfg.config.tools.terminal:
-        tools.extend(
-            create_terminal_tool(
-                workspace,
-                io,
-                report,
-                confirm_commands=cfg.config.safety.confirm_commands,
-                allowlist=cfg.config.tools.terminal_policy.allowlist,
-                denylist=cfg.config.tools.terminal_policy.denylist,
-                default_timeout=cfg.config.tools.terminal_policy.timeout_seconds,
-                shell_default=cfg.config.tools.terminal_policy.shell,
-            )
-        )
-    if cfg.config.tools.python_exec:
-        tools.extend(
-            create_python_tools(
-                workspace,
-                io,
-                report,
-                venv_mode=cfg.config.python.venv_mode,
-                local_venv_dir=cfg.config.python.local_venv_dir,
-                global_cache_dir=cfg.config.python.global_cache_dir,
-                auto_create_venv=cfg.config.python.auto_create_venv,
-                auto_install_requirements=cfg.config.python.auto_install_requirements,
-                exec_timeout_seconds=cfg.config.python.exec_timeout_seconds,
-                confirm_installs=cfg.config.safety.confirm_installs,
-            )
-        )
 
     initial_prompt = None
     if prompt_file:
