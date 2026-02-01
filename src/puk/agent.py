@@ -120,7 +120,17 @@ class PukAgent:
     async def send(self, prompt: str) -> None:
         if not self.session:
             raise RuntimeError("Session not started")
-        await self.session.send_and_wait({"prompt": prompt})
+        try:
+            await self.session.send_and_wait(
+                {"prompt": prompt},
+                timeout=self.config.session.response_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            await self.io.display(
+                "Timed out waiting for session idle; the agent may still be working. "
+                "Consider retrying or increasing session.response_timeout_seconds.",
+                "warning",
+            )
 
     async def plan(self, prompt: str) -> str:
         system_prompt = "Provide a step-by-step plan only. Do not call tools."

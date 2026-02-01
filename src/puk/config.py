@@ -71,6 +71,7 @@ class SessionConfig(BaseModel):
     infinite: bool = True
     compaction_threshold: float = 0.80
     system_prompt_file: str = ""
+    response_timeout_seconds: int = 300
 
 
 class SafetyConfig(BaseModel):
@@ -176,9 +177,12 @@ def _load_toml(path: Path) -> dict[str, Any]:
 def _discover_local_config(start_dir: Path) -> Path | None:
     current = start_dir
     while True:
-        candidate = current / ".puk.config"
-        if candidate.is_file():
-            return candidate
+        candidate_toml = current / ".puk.toml"
+        if candidate_toml.is_file():
+            return candidate_toml
+        candidate_legacy = current / ".puk.config"
+        if candidate_legacy.is_file():
+            return candidate_legacy
         if current.parent == current:
             return None
         current = current.parent
@@ -223,12 +227,16 @@ def load_config(
     home = Path.home()
 
     global_config_path = None
-    global_primary = home / ".puk.config"
+    global_primary = home / ".puk.toml"
     global_alt = home / ".config" / "puk" / "config.toml"
     if global_primary.is_file():
         global_config_path = global_primary
     elif global_alt.is_file():
         global_config_path = global_alt
+    else:
+        legacy_global = home / ".puk.config"
+        if legacy_global.is_file():
+            global_config_path = legacy_global
 
     global_config = _load_toml(global_config_path) if global_config_path else {}
 
@@ -238,18 +246,26 @@ def load_config(
     root_base = cwd
     if cli_root:
         root_base = Path(cli_root).expanduser().resolve()
-        candidate = root_base / ".puk.config"
+        candidate = root_base / ".puk.toml"
         if candidate.is_file():
             local_config_path = candidate
+        else:
+            legacy = root_base / ".puk.config"
+            if legacy.is_file():
+                local_config_path = legacy
     else:
         if discover_root:
             local_config_path = _discover_local_config(cwd)
             if local_config_path:
                 root_base = local_config_path.parent
         else:
-            candidate = cwd / ".puk.config"
+            candidate = cwd / ".puk.toml"
             if candidate.is_file():
                 local_config_path = candidate
+            else:
+                legacy = cwd / ".puk.config"
+                if legacy.is_file():
+                    local_config_path = legacy
 
     local_config = _load_toml(local_config_path) if local_config_path else {}
 

@@ -9,5 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
-# Local config files
+# Local config and data files
 .puk.config
+.puk/
+

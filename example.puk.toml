@@ -1,0 +1,120 @@
+# Example PUK configuration file
+# Save as .puk.toml in your project root (or in ~/) to activate.
+# Format: TOML. Unknown keys are ignored unless core.strict_config=true.
+
+[core]
+# UI mode: "tui" (rich terminal UI) or "plain" (simple console).
+ui = "plain"
+# Start REPL when no prompt is provided.
+repl = true
+# Stream assistant tokens/events.
+streaming = true
+# If true, unknown keys cause an error.
+strict_config = false
+# Telemetry: "off" or "local" (local logs only).
+telemetry = "off"
+
+[workspace]
+# Root folder (resolved to absolute path at runtime).
+root = "."
+# If true, search upward for .puk.config to find root.
+discover_root = true
+# Allow operations outside root (dangerous!).
+allow_outside_root = false
+# If false, deny symlink escapes from root.
+follow_symlinks = false
+# Maximum bytes to read per file.
+max_file_bytes = 2000000
+# Folders to ignore in scans/search.
+ignore = [".git", ".puk", "node_modules", "dist", "build", "__pycache__"]
+# Allowed file globs for read/search.
+allow_globs = ["**/*.py", "**/*.md", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.json"]
+# Denied file globs (sensitive by default).
+deny_globs = ["**/.env", "**/*secret*", "**/*key*", "**/*.pem"]
+
+[llm]
+# Provider: "copilot" or BYOK: "openai" | "azure" | "anthropic"
+provider = "copilot"
+# Model name (provider-specific).
+model = "gpt-5"
+# Optional fallback provider/model.
+fallback_provider = ""
+fallback_model = ""
+# For BYOK: name of env var that holds API key.
+api_key_env = "OPENAI_API_KEY"
+# For Azure: endpoint URL and API version.
+azure_endpoint = ""
+azure_api_version = "2024-02-15-preview"
+# Output control.
+max_output_tokens = 2048
+temperature = 0.2
+
+[session]
+# Enable infinite sessions with compaction.
+infinite = true
+compaction_threshold = 0.80
+# Optional additional system prompt (relative to root).
+system_prompt_file = ""
+# Response timeout for send_and_wait in seconds.
+response_timeout_seconds = 300
+
+[safety]
+# Confirmations for risky actions.
+confirm_mutations = true
+confirm_commands = true
+confirm_installs = true
+confirm_mcp = true
+# Redact secrets from displayed output.
+redact_secrets = true
+# If true, prompt before reading sensitive globs.
+paranoid_reads = false
+
+[tools]
+filesystem = true
+terminal = true
+python_exec = true
+mcp = false
+user_io = true
+
+[tools.filesystem_policy]
+# Allow deletes at all (still requires confirmation unless --confirm).
+allow_delete = false
+# Allow overwriting existing files.
+allow_overwrite = true
+# "diff-first" stages changes and shows diffs; "direct" writes immediately.
+staging_mode = "diff-first"
+# Limit number of files that can be written in a single run.
+max_write_files = 200
+
+[tools.terminal_policy]
+# If false, shell execution is blocked.
+shell = false
+# Default command timeout (seconds).
+timeout_seconds = 300
+# Allowed commands (first token must be in list).
+allowlist = ["git", "python", "pytest", "ruff", "mypy", "make"]
+# Denied commands (checked before allowlist).
+denylist = ["rm", "dd", "mkfs", "shutdown", "reboot", "curl", "wget"]
+
+[python]
+# Virtualenv isolation strategy.
+venv_mode = "local"  # "local" or "global-cache"
+local_venv_dir = ".puk/venv"
+global_cache_dir = "~/.puk/venvs"
+# Auto-create venv if missing.
+auto_create_venv = true
+# Auto-install requirements (still confirmed unless --confirm).
+auto_install_requirements = false
+requirements_files = ["requirements.txt", "pyproject.toml"]
+# Python exec timeout (seconds).
+exec_timeout_seconds = 300
+
+[mcp]
+# Enable MCP at all.
+enabled = false
+
+# Example MCP server (commented out)
+# [mcp.servers.github]
+# type = "http"
+# url = "https://api.githubcopilot.com/mcp/"
+# tools = ["*"]
