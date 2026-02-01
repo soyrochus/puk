@@ -8,7 +8,7 @@ Puk is a local, agentic code generation and automation tool that provides a Copi
 
 ![puk-small.png](./images/puk-small.png)
 
-NOTE: Currently this application is a thin shell over the Copilot SDK and very much alpha software and the Coplit SDK itself is still in early beta. So use at your own rist.
+NOTE: Currently this application is a thin shell over the Copilot SDK and very much alpha software and the Copilot SDK itself is still in early beta. So use at your own risk!
 
 ## Features
 
