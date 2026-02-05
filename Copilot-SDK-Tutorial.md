@@ -271,23 +271,19 @@ def handle_event(event):
     match event.type:
         case SessionEventType.ASSISTANT_MESSAGE_DELTA:
             # Token-by-token response
-            print(event.delta, end="", flush=True)
-        
-        case SessionEventType.ASSISTANT_MESSAGE_COMPLETE:
-            # Full response complete
+            print(event.data.delta_content, end="", flush=True)
+
+        case SessionEventType.ASSISTANT_TURN_END:
+            # Assistant turn complete
             print("\n--- Complete ---")
-        
-        case SessionEventType.TOOL_INVOCATION_START:
+
+        case SessionEventType.TOOL_EXECUTION_START:
             # AI is calling a tool
-            print(f"Calling tool: {event.tool_name}")
-        
-        case SessionEventType.TOOL_INVOCATION_END:
+            print(f"Calling tool: {event.data.tool_name}")
+
+        case SessionEventType.TOOL_EXECUTION_COMPLETE:
             # Tool finished
-            print(f"Tool result: {event.result}")
-        
-        case SessionEventType.ERROR:
-            # Something went wrong
-            print(f"Error: {event.error}")
+            print(f"Tool result: {event.data.result}")
 
 session.on(handle_event)
 ```
@@ -1306,11 +1302,11 @@ Always reference specific files and line numbers when discussing code.""",
         # Set up event handler for streaming output
         def handle_event(event):
             if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
-                print(event.delta, end="", flush=True)
-            elif event.type == SessionEventType.ASSISTANT_MESSAGE_COMPLETE:
+                print(event.data.delta_content, end="", flush=True)
+            elif event.type == SessionEventType.ASSISTANT_TURN_END:
                 print()  # Newline after complete response
-            elif event.type == SessionEventType.TOOL_INVOCATION_START:
-                print(f"\n[Tool: {event.tool_name}]", flush=True)
+            elif event.type == SessionEventType.TOOL_EXECUTION_START:
+                print(f"\n[Tool: {event.data.tool_name}]", flush=True)
         
         self.session.on(handle_event)
     

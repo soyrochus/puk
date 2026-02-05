@@ -6,10 +6,15 @@ from pathlib import Path
 from typing import Protocol
 
 from copilot import CopilotClient
-from copilot.generated.session_events import SessionEventType
+from copilot.generated.session_events import SessionEvent, SessionEventType
 from rich.console import Console
 
 from puk.ui import FancyRenderer, PlainRenderer
+
+
+def _auto_approve_permission(request: dict, metadata: dict) -> dict:
+    """Auto-approve all tool permission requests."""
+    return {"kind": "approved"}
 
 
 DEFAULT_SYSTEM_PROMPT = """You are Puk, a pragmatic local coding assistant.
@@ -49,18 +54,27 @@ class PukApp:
             "working_directory": str(Path(self.config.workspace).resolve()),
             "excluded_tools": [],  # keep internal SDK tools enabled
             "system_message": {"content": DEFAULT_SYSTEM_PROMPT},
+            "on_permission_request": _auto_approve_permission,
         }
 
-    def _on_event(self, event) -> None:
+    def _on_event(self, event: SessionEvent) -> None:
+        # Debug: uncomment to see all events
+        # print(f"[DEBUG] {event.type}")
         if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
-            chunk = getattr(event, "delta", None) or getattr(event, "delta_content", "")
+            chunk = event.data.delta_content
             if chunk:
                 self.renderer.write_delta(chunk)
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
             self.renderer.end_message()
-        elif event.type == SessionEventType.TOOL_INVOCATION_START:
-            name = getattr(event, "tool_name", "unknown")
+        elif event.type == SessionEventType.TOOL_EXECUTION_START:
+            name = event.data.tool_name or "unknown"
             self.renderer.show_tool_event(name)
+        elif event.type == SessionEventType.SESSION_ERROR:
+            msg = event.data.message if event.data.message else "Unknown error"
+            print(f"\n[error] {msg}")
+        elif event.type == SessionEventType.TOOL_USER_REQUESTED:
+            # User confirmation requested for a tool - auto-approve handled by permission handler
+            pass
 
     async def start(self) -> None:
         await self.client.start()
@@ -68,7 +82,7 @@ class PukApp:
         self.session.on(self._on_event)
 
     async def ask(self, prompt: str) -> None:
-        await self.session.send_and_wait({"prompt": prompt})
+        await self.session.send_and_wait({"prompt": prompt}, timeout=600)
 
     async def repl(self) -> None:
         self.renderer.show_banner()
