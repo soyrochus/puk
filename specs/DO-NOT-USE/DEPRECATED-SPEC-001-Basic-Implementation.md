@@ -344,7 +344,7 @@ PUK should support a “dry run” mode:
 
 * OS: Linux/macOS first; Windows optional
 * Python: 3.11+
-* Robust streaming handling in TUI and plain mode 
+* Robust streaming handling in TUI
 * Timeouts and interrupt handling (Ctrl+C)
 * Deterministic exit codes:
 
@@ -395,7 +395,7 @@ Effective config is the merged result with “last writer wins” semantics at t
 ```toml
 [core]
 profile = "default"              # optional; allows named profile selection later
-ui = "tui"                       # "tui" | "plain"
+ui = "tui"
 repl = true                      # start REPL when no prompt is provided
 streaming = true                 # stream assistant tokens/events
 strict_config = false            # if true, unknown keys cause error
@@ -603,4 +603,3 @@ exec_timeout_seconds = 300
 
   * missing information is an immediate error (exit code "missing info")
   * confirmations cannot be prompted; behavior depends on `--confirm` and config.
-

@@ -9,9 +9,7 @@ Puk is now a minimal proof-of-concept Copilot SDK app in the `puk` namespace.
 ## What this first version includes
 
 - Interactive REPL mode (`puk`)
-- Two rendering modes:
-  - `--mode plain`: simple text output
-  - `--mode fancy`: rich unicode + colors
+- Multiline REPL input with explicit send
 - Automated one-shot mode (`puk "your prompt"`) for non-interactive runs
 - GitHub Copilot SDK session wiring with streaming enabled
 - SDK internal tools left enabled (no tool exclusions)
@@ -24,17 +22,13 @@ uv sync
 
 ## Usage
 
-### Interactive REPL (fancy mode default)
+### Interactive REPL
 
 ```bash
 puk
 ```
 
-### Interactive REPL in plain mode
-
-```bash
-puk --mode plain
-```
+Press Enter to add a new line, and Ctrl+Enter to send your message.
 
 ### Automated mode (one-shot prompt)
 

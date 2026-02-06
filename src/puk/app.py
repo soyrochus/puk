@@ -7,9 +7,11 @@ from typing import Protocol
 
 from copilot import CopilotClient
 from copilot.generated.session_events import SessionEvent, SessionEventType
-from rich.console import Console
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.patch_stdout import patch_stdout
 
-from puk.ui import FancyRenderer, PlainRenderer
+from puk.ui import ConsoleRenderer
 
 
 def _auto_approve_permission(request: dict, metadata: dict) -> dict:
@@ -35,7 +37,6 @@ class Renderer(Protocol):
 
 @dataclass
 class PukConfig:
-    mode: str = "fancy"
     model: str = "gpt-5"
     workspace: str = "."
 
@@ -45,7 +46,7 @@ class PukApp:
         self.config = config
         self.client = CopilotClient()
         self.session = None
-        self.renderer: Renderer = PlainRenderer() if config.mode == "plain" else FancyRenderer(console=Console())
+        self.renderer: Renderer = ConsoleRenderer()
 
     def session_config(self) -> dict:
         return {
@@ -86,12 +87,21 @@ class PukApp:
 
     async def repl(self) -> None:
         self.renderer.show_banner()
-        while True:
-            raw = input("puk> ").strip()
-            if raw in {"/exit", "/quit", "quit", "exit"}:
-                return
-            if raw:
-                await self.ask(raw)
+        bindings = KeyBindings()
+
+        @bindings.add("c-enter")
+        def _(event) -> None:
+            event.app.current_buffer.validate_and_handle()
+
+        session = PromptSession("puk> ", multiline=True, key_bindings=bindings)
+        with patch_stdout():
+            while True:
+                raw = await session.prompt_async()
+                stripped = raw.strip()
+                if stripped in {"/exit", "/quit", "quit", "exit"}:
+                    return
+                if stripped:
+                    await self.ask(raw)
 
     async def close(self) -> None:
         if self.session is not None:
