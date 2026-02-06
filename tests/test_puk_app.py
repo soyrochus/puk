@@ -14,7 +14,7 @@ class FakeSession:
     def on(self, handler):
         self.handlers.append(handler)
 
-    async def send_and_wait(self, payload):
+    async def send_and_wait(self, payload, timeout=None):
         self.prompts.append(payload["prompt"])
 
     async def destroy(self):

@@ -20,7 +20,6 @@ Puk is now a minimal proof-of-concept Copilot SDK app in the `puk` namespace.
 
 ```bash
 uv sync
-uv pip install -e .
 ```
 
 ## Usage
