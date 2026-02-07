@@ -44,7 +44,7 @@ async def test_run_app_one_shot(monkeypatch):
     fake = FakeClient()
     monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
 
-    await run_app(PukConfig(mode="plain", workspace="."), one_shot_prompt="hello")
+    await run_app(PukConfig(workspace="."), one_shot_prompt="hello")
 
     assert fake.started is True
     assert fake.stopped is True
@@ -56,7 +56,7 @@ def test_session_config_contains_workspace_and_system_message(monkeypatch):
     fake = FakeClient()
     monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
 
-    app = PukApp(PukConfig(mode="plain", workspace="."))
+    app = PukApp(PukConfig(workspace="."))
     cfg = app.session_config()
 
     assert cfg["streaming"] is True

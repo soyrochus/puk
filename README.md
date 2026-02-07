@@ -28,7 +28,7 @@ uv sync
 puk
 ```
 
-Press Enter to add a new line, and Ctrl+Enter to send your message.
+Press Enter to add a new line, and use Ctrl+J to send your message.
 
 ### Automated mode (one-shot prompt)
 

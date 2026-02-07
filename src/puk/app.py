@@ -89,9 +89,12 @@ class PukApp:
         self.renderer.show_banner()
         bindings = KeyBindings()
 
-        @bindings.add("c-enter")
-        def _(event) -> None:
+        def _submit(event) -> None:
             event.app.current_buffer.validate_and_handle()
+
+        @bindings.add("c-j")
+        def _(event) -> None:
+            _submit(event)
 
         session = PromptSession("puk> ", multiline=True, key_bindings=bindings)
         with patch_stdout():
