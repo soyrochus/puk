@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "click",
     "pydantic>=2.0",
-    "rich",
+    "prompt_toolkit",
     "github-copilot-sdk",
 ]
 
