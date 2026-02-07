@@ -30,6 +30,10 @@ class Renderer(Protocol):
 
     def show_tool_event(self, tool_name: str) -> None: ...
 
+    def show_working(self) -> None: ...
+
+    def hide_working(self) -> None: ...
+
     def write_delta(self, chunk: str) -> None: ...
 
     def end_message(self) -> None: ...
@@ -47,6 +51,7 @@ class PukApp:
         self.client = CopilotClient()
         self.session = None
         self.renderer: Renderer = ConsoleRenderer()
+        self._awaiting_response = False
 
     def session_config(self) -> dict:
         return {
@@ -62,15 +67,19 @@ class PukApp:
         # Debug: uncomment to see all events
         # print(f"[DEBUG] {event.type}")
         if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
+            self._mark_response_started()
             chunk = event.data.delta_content
             if chunk:
                 self.renderer.write_delta(chunk)
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
+            self._mark_response_started()
             self.renderer.end_message()
         elif event.type == SessionEventType.TOOL_EXECUTION_START:
+            self._mark_response_started()
             name = event.data.tool_name or "unknown"
             self.renderer.show_tool_event(name)
         elif event.type == SessionEventType.SESSION_ERROR:
+            self._mark_response_started()
             msg = event.data.message if event.data.message else "Unknown error"
             print(f"\n[error] {msg}")
         elif event.type == SessionEventType.TOOL_USER_REQUESTED:
@@ -83,7 +92,18 @@ class PukApp:
         self.session.on(self._on_event)
 
     async def ask(self, prompt: str) -> None:
-        await self.session.send_and_wait({"prompt": prompt}, timeout=600)
+        self._awaiting_response = True
+        self.renderer.show_working()
+        try:
+            await self.session.send_and_wait({"prompt": prompt}, timeout=600)
+        finally:
+            self._mark_response_started()
+
+    def _mark_response_started(self) -> None:
+        if not self._awaiting_response:
+            return
+        self._awaiting_response = False
+        self.renderer.hide_working()
 
     async def repl(self) -> None:
         self.renderer.show_banner()

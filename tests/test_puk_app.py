@@ -39,6 +39,29 @@ class FakeClient:
         return self.session
 
 
+class SpyRenderer:
+    def __init__(self):
+        self.calls = []
+
+    def show_banner(self):
+        pass
+
+    def show_tool_event(self, tool_name):
+        pass
+
+    def show_working(self):
+        self.calls.append("show_working")
+
+    def hide_working(self):
+        self.calls.append("hide_working")
+
+    def write_delta(self, chunk):
+        pass
+
+    def end_message(self):
+        pass
+
+
 @pytest.mark.asyncio
 async def test_run_app_one_shot(monkeypatch):
     fake = FakeClient()
@@ -62,3 +85,17 @@ def test_session_config_contains_workspace_and_system_message(monkeypatch):
     assert cfg["streaming"] is True
     assert "system_message" in cfg
     assert "working_directory" in cfg
+
+
+@pytest.mark.asyncio
+async def test_ask_shows_and_hides_working_indicator(monkeypatch):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+    app = PukApp(PukConfig(workspace="."))
+    app.session = fake.session
+    renderer = SpyRenderer()
+    app.renderer = renderer
+
+    await app.ask("hello")
+
+    assert renderer.calls == ["show_working", "hide_working"]

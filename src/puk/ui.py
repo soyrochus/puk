@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class ConsoleRenderer:
     _buffer: str = field(default="", init=False)
+    _thinking_visible: bool = field(default=False, init=False)
 
     def show_banner(self) -> None:
         print("Puk REPL")
@@ -13,6 +14,18 @@ class ConsoleRenderer:
 
     def show_tool_event(self, tool_name: str) -> None:
         print(f"\n[tool] {tool_name}")
+
+    def show_working(self) -> None:
+        if self._thinking_visible:
+            return
+        self._thinking_visible = True
+        print("\nPuk is thinking...", end="", flush=True)
+
+    def hide_working(self) -> None:
+        if not self._thinking_visible:
+            return
+        self._thinking_visible = False
+        print("\r" + (" " * 20) + "\r", end="", flush=True)
 
     def write_delta(self, chunk: str) -> None:
         self._buffer += chunk

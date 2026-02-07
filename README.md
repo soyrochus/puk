@@ -58,6 +58,17 @@ The agent will handle the request using Copilot SDK tools available in the sessi
 uv run pytest
 ```
 
+## Principles of Participation
+
+Everyone is invited and welcome to contribute: open issues, propose pull requests, share ideas, or help improve documentation.  
+Participation is open to all, regardless of background or viewpoint.  
+
+This project follows the [FOSS Pluralism Manifesto](./FOSS_PLURALISM_MANIFESTO.md),  
+which affirms respect for people, freedom to critique ideas, and space for diverse perspectives.  
+
+
 ## License and Copyright
 
 Copyright (c) 2026, Iwan van der Kleijn
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
