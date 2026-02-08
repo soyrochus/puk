@@ -17,6 +17,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from puk.config import BYOK_PROVIDERS, LLMSettings
+from puk.playbooks import is_path_within_scope
 from puk.run import RunRecorder
 from puk import runs as run_inspect
 from puk.ui import ConsoleRenderer
@@ -28,6 +29,39 @@ _LOG = logging.getLogger("puk")
 def _auto_approve_permission(request: dict, metadata: dict) -> dict:
     """Auto-approve all tool permission requests."""
     return {"kind": "approved"}
+
+
+def _deny_permission(reason: str) -> dict:
+    return {"kind": "denied", "reason": reason}
+
+
+def _extract_tool_name(request: dict, metadata: dict) -> str:
+    return (
+        request.get("tool_name")
+        or request.get("name")
+        or metadata.get("tool_name")
+        or metadata.get("name")
+        or "unknown"
+    )
+
+
+def _extract_paths(request: dict, metadata: dict) -> list[str]:
+    candidates = []
+    for source in (request, metadata):
+        for key in ("path", "paths", "file", "files", "target", "targets", "destination", "dest"):
+            if key not in source:
+                continue
+            value = source[key]
+            if isinstance(value, (list, tuple)):
+                candidates.extend([str(item) for item in value])
+            else:
+                candidates.append(str(value))
+    return [path for path in candidates if path]
+
+
+def _tool_may_write(tool_name: str) -> bool:
+    lowered = tool_name.lower()
+    return any(token in lowered for token in ("write", "append", "edit", "create", "mkdir", "rm", "delete"))
 
 
 DEFAULT_SYSTEM_PROMPT = """You are Puk, a pragmatic local coding assistant.
@@ -54,6 +88,9 @@ class Renderer(Protocol):
 class PukConfig:
     workspace: str = "."
     llm: LLMSettings = LLMSettings()
+    allowed_tools: list[str] | None = None
+    write_scope: list[str] | None = None
+    execution_mode: str | None = None
 
 
 def _looks_like_env_var_name(value: str) -> bool:
@@ -107,6 +144,8 @@ class PukApp:
         self.run_recorder = run_recorder
         self._active_turn_id: int | None = None
         self._output_buffer: list[str] = []
+        self._capture_output = False
+        self._last_output: str | None = None
 
     def session_config(self) -> dict:
         config = {
@@ -114,7 +153,7 @@ class PukApp:
             "working_directory": str(Path(self.config.workspace).resolve()),
             "excluded_tools": [],  # keep internal SDK tools enabled
             "system_message": {"content": DEFAULT_SYSTEM_PROMPT},
-            "on_permission_request": _auto_approve_permission,
+            "on_permission_request": self._permission_handler(),
             "temperature": self.config.llm.temperature,
             "max_output_tokens": self.config.llm.max_output_tokens,
         }
@@ -125,6 +164,36 @@ class PukApp:
             config["provider"] = provider
         return config
 
+    def _permission_handler(self):
+        if (
+            self.config.execution_mode == "plan"
+            or self.config.allowed_tools is not None
+            or self.config.write_scope is not None
+        ):
+            allowed = set(self.config.allowed_tools or [])
+            write_scope = self.config.write_scope or []
+            workspace = Path(self.config.workspace)
+
+            def _handler(request: dict, metadata: dict) -> dict:
+                tool_name = _extract_tool_name(request, metadata)
+                if self.config.execution_mode == "plan":
+                    return _deny_permission("Tool execution is disabled in plan mode.")
+                if self.config.allowed_tools is not None and tool_name not in allowed:
+                    return _deny_permission(f"Tool '{tool_name}' is not allowed for this playbook.")
+                if self.config.write_scope is not None and _tool_may_write(tool_name):
+                    paths = _extract_paths(request, metadata)
+                    if not paths:
+                        return _deny_permission("Write scope enforcement requires a target path.")
+                    for path in paths:
+                        if not is_path_within_scope(path, workspace, write_scope):
+                            return _deny_permission(
+                                f"Path '{path}' is outside the allowed write scope."
+                            )
+                return {"kind": "approved"}
+
+            return _handler
+        return _auto_approve_permission
+
     def _on_event(self, event: SessionEvent) -> None:
         # Debug: uncomment to see all events
         # print(f"[DEBUG] {event.type}")
@@ -133,7 +202,7 @@ class PukApp:
             chunk = event.data.delta_content
             if chunk:
                 self.renderer.write_delta(chunk)
-                if self.run_recorder and self._active_turn_id is not None:
+                if (self.run_recorder or self._capture_output) and self._active_turn_id is not None:
                     self._output_buffer.append(chunk)
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
             self._mark_response_started()
@@ -141,8 +210,11 @@ class PukApp:
             if self.run_recorder and self._active_turn_id is not None:
                 text = "".join(self._output_buffer)
                 self.run_recorder.record_model_output(text, turn_id=self._active_turn_id)
-                self._output_buffer = []
-                self._active_turn_id = None
+            if self._capture_output and self._active_turn_id is not None:
+                self._last_output = "".join(self._output_buffer)
+            self._output_buffer = []
+            self._active_turn_id = None
+            self._capture_output = False
         elif event.type == SessionEventType.TOOL_EXECUTION_START:
             self._mark_response_started()
             name = event.data.tool_name or "unknown"
@@ -169,13 +241,20 @@ class PukApp:
         # Use model or workspace name as a light slug when none is obvious.
         return Path(self.config.workspace).name
 
-    async def ask(self, prompt: str) -> None:
+    async def ask(
+        self,
+        prompt: str,
+        capture: bool = False,
+        context_items: list[dict] | None = None,
+    ) -> str | None:
         self._awaiting_response = True
         turn_id = self.run_recorder.next_turn_id() if self.run_recorder else None
         self._active_turn_id = turn_id
         self._output_buffer = []
+        self._capture_output = capture
+        self._last_output = None
         if self.run_recorder:
-            self.run_recorder.record_user_input(prompt, turn_id=turn_id)
+            self.run_recorder.record_user_input(prompt, turn_id=turn_id, context_items=context_items)
         self.renderer.show_working()
         try:
             await self.session.send_and_wait({"prompt": prompt}, timeout=600)
@@ -185,6 +264,7 @@ class PukApp:
             raise RuntimeError(self._user_facing_error(exc)) from None
         finally:
             self._mark_response_started()
+        return self._last_output
 
     def _user_facing_error(self, exc: Exception) -> str:
         message = str(exc)

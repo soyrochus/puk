@@ -127,9 +127,14 @@ class RunRecorder:
         self.turn_id += 1
         return self.turn_id
 
-    def record_user_input(self, text: str, turn_id: int) -> None:
+    def record_user_input(
+        self,
+        text: str,
+        turn_id: int,
+        context_items: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._append_event("input.user", {"text": text}, turn_id=turn_id)
-        self._append_event("context.resolved", {"items": []}, turn_id=turn_id)
+        self._append_event("context.resolved", {"items": context_items or []}, turn_id=turn_id)
 
     def record_model_output(self, text: str, turn_id: int) -> None:
         self._append_event("model.output", {"text": text}, turn_id=turn_id)
@@ -143,6 +148,9 @@ class RunRecorder:
             {"path": relative_path, "summary": summary or ""},
             turn_id=turn_id,
         )
+
+    def record_event(self, event_type: str, data: dict[str, Any], turn_id: int | None = None) -> None:
+        self._append_event(event_type, data, turn_id=turn_id)
 
     # ---------- internal helpers ----------
     def _acquire_lock(self) -> None:

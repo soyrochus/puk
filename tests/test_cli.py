@@ -1,7 +1,7 @@
 import pytest
 
 import puk.__main__ as main_mod
-from puk.__main__ import build_parser, build_runs_parser
+from puk.__main__ import build_parser, build_run_parser, build_runs_parser
 
 
 def test_parser_defaults():
@@ -46,6 +46,30 @@ def test_runs_list_subcommand():
     parser = build_runs_parser()
     args = parser.parse_args(["list", "--workspace", "/tmp/ws"])
     assert args.command == "list"
+    assert args.workspace == "/tmp/ws"
+
+
+def test_run_subcommand_parsing():
+    parser = build_run_parser()
+    args = parser.parse_args(
+        [
+            "specs/playbook.md",
+            "--param",
+            "target=docs",
+            "--param",
+            "flag=true",
+            "--mode",
+            "plan",
+            "--append-to-run",
+            "run-123",
+            "--workspace",
+            "/tmp/ws",
+        ]
+    )
+    assert args.playbook_path == "specs/playbook.md"
+    assert args.param == ["target=docs", "flag=true"]
+    assert args.mode == "plan"
+    assert args.append_to_run == "run-123"
     assert args.workspace == "/tmp/ws"
 
 

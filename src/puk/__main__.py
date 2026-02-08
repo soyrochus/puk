@@ -9,13 +9,32 @@ from pathlib import Path
 
 from puk.app import PukConfig, run_sync
 from puk.config import log_resolved_llm_config, resolve_llm_config
+from puk.playbook_runner import run_playbook_sync
+from puk.playbooks import (
+    PlaybookValidationError,
+    load_playbook,
+    parse_param_assignments,
+    resolve_parameters,
+)
+
+
+def _add_llm_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--provider", default=None, help="LLM provider to use")
+    parser.add_argument("--model", default=None, help="Model to use with the provider")
+    parser.add_argument("--temperature", default=None, type=float, help="LLM temperature override")
+    parser.add_argument(
+        "--max-output-tokens",
+        default=None,
+        type=int,
+        help="Maximum output tokens override",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="puk",
         description="Minimal Copilot SDK REPL",
-        epilog="Additional commands: `puk runs list|show|tail` for run inspection.",
+        epilog="Additional commands: `puk run <playbook>` and `puk runs list|show|tail`.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("prompt", nargs="?", help="Optional one-shot prompt for automated mode")
@@ -26,16 +45,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Append events to existing run id or path under .puk/runs",
     )
-    parser.add_argument("--provider", default=None, help="LLM provider to use")
-    parser.add_argument("--model", default=None, help="Model to use with the provider")
-    parser.add_argument("--temperature", default=None, type=float, help="LLM temperature override")
+    _add_llm_args(parser)
+    parser.add_argument("--workspace", default=".", help="Root directory for agent tools")
+    return parser
+
+
+def build_run_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="puk run", description="Run a playbook")
+    parser.add_argument("playbook_path", help="Path to the playbook markdown file")
     parser.add_argument(
-        "--max-output-tokens",
+        "--param",
+        action="append",
+        default=[],
+        help="Playbook parameter assignment (key=value). Repeatable.",
+    )
+    parser.add_argument("--mode", choices=["plan", "apply"], default=None, help="Execution mode")
+    parser.add_argument(
+        "-a",
+        "--append-to-run",
+        dest="append_to_run",
         default=None,
-        type=int,
-        help="Maximum output tokens override",
+        help="Append events to existing run id or path under .puk/runs",
     )
     parser.add_argument("--workspace", default=".", help="Root directory for agent tools")
+    _add_llm_args(parser)
     return parser
 
 
@@ -64,6 +97,38 @@ def build_runs_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     # Dispatch between main run mode and runs subcommands
+    if len(sys.argv) > 1 and sys.argv[1] == "run":
+        run_parser = build_run_parser()
+        args = run_parser.parse_args(sys.argv[2:])
+        logging.basicConfig(level=os.environ.get("PUK_LOG_LEVEL", "INFO"))
+        workspace = Path(getattr(args, "workspace", "."))
+        try:
+            resolved = resolve_llm_config(
+                workspace=workspace,
+                parameters={
+                    "provider": args.provider,
+                    "model": args.model,
+                    "temperature": args.temperature,
+                    "max_output_tokens": args.max_output_tokens,
+                },
+            )
+            log_resolved_llm_config(resolved)
+            playbook = load_playbook(Path(args.playbook_path))
+            raw_params = parse_param_assignments(args.param)
+            parameters = resolve_parameters(playbook.parameters, raw_params, workspace)
+            mode = args.mode or playbook.run_mode
+            run_playbook_sync(
+                workspace=workspace,
+                playbook=playbook,
+                mode=mode,
+                parameters=parameters,
+                llm=resolved.settings,
+                append_to_run=args.append_to_run,
+                argv=sys.argv[1:],
+            )
+        except (ValueError, PlaybookValidationError) as exc:
+            raise SystemExit(str(exc)) from None
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "runs":
         runs_parser = build_runs_parser()
         args = runs_parser.parse_args(sys.argv[2:])
