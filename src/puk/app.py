@@ -16,6 +16,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from puk.config import BYOK_PROVIDERS, LLMSettings
+from puk.run import RunRecorder
 from puk.ui import ConsoleRenderer
 
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -94,13 +95,16 @@ def _provider_config(settings: LLMSettings) -> dict | None:
 
 
 class PukApp:
-    def __init__(self, config: PukConfig):
+    def __init__(self, config: PukConfig, run_recorder: RunRecorder | None = None):
         self.config = config
         self.client = CopilotClient()
         self.session = None
         self.renderer: Renderer = ConsoleRenderer()
         self._awaiting_response = False
         self._effective_model = config.llm.model
+        self.run_recorder = run_recorder
+        self._active_turn_id: int | None = None
+        self._output_buffer: list[str] = []
 
     def session_config(self) -> dict:
         config = {
@@ -127,13 +131,22 @@ class PukApp:
             chunk = event.data.delta_content
             if chunk:
                 self.renderer.write_delta(chunk)
+                if self.run_recorder and self._active_turn_id is not None:
+                    self._output_buffer.append(chunk)
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
             self._mark_response_started()
             self.renderer.end_message()
+            if self.run_recorder and self._active_turn_id is not None:
+                text = "".join(self._output_buffer)
+                self.run_recorder.record_model_output(text, turn_id=self._active_turn_id)
+                self._output_buffer = []
+                self._active_turn_id = None
         elif event.type == SessionEventType.TOOL_EXECUTION_START:
             self._mark_response_started()
             name = event.data.tool_name or "unknown"
             self.renderer.show_tool_event(name)
+            if self.run_recorder:
+                self.run_recorder.record_tool_call(name=name, turn_id=self._active_turn_id)
         elif event.type == SessionEventType.SESSION_ERROR:
             self._mark_response_started()
             # Errors are surfaced via send_and_wait exceptions; avoid duplicate prints here.
@@ -147,13 +160,26 @@ class PukApp:
         self.session = await self.client.create_session(self.session_config())
         self.session.on(self._on_event)
         await self._log_backend_selected_model()
+        if self.run_recorder:
+            self.run_recorder.start(title_slug=self._title_slug())
+
+    def _title_slug(self) -> str | None:
+        # Use model or workspace name as a light slug when none is obvious.
+        return Path(self.config.workspace).name
 
     async def ask(self, prompt: str) -> None:
         self._awaiting_response = True
+        turn_id = self.run_recorder.next_turn_id() if self.run_recorder else None
+        self._active_turn_id = turn_id
+        self._output_buffer = []
+        if self.run_recorder:
+            self.run_recorder.record_user_input(prompt, turn_id=turn_id)
         self.renderer.show_working()
         try:
             await self.session.send_and_wait({"prompt": prompt}, timeout=600)
         except Exception as exc:
+            if self.run_recorder:
+                self.run_recorder.close(status="failed", reason=str(exc))
             raise RuntimeError(self._user_facing_error(exc)) from None
         finally:
             self._mark_response_started()
@@ -201,10 +227,12 @@ class PukApp:
                     except RuntimeError as exc:
                         print(f"\n[error] {exc}")
 
-    async def close(self) -> None:
+    async def close(self, status: str = "closed", reason: str = "completed") -> None:
         if self.session is not None:
             await self.session.destroy()
         await self.client.stop()
+        if self.run_recorder:
+            self.run_recorder.close(status=status, reason=reason)
 
     async def _log_backend_selected_model(self) -> None:
         """Log backend-confirmed selected model from session.start, when available."""
@@ -220,17 +248,32 @@ class PukApp:
                 return
 
 
-async def run_app(config: PukConfig, one_shot_prompt: str | None = None) -> None:
-    app = PukApp(config)
+async def run_app(config: PukConfig, one_shot_prompt: str | None = None, recorder: RunRecorder | None = None) -> None:
+    app = PukApp(config, run_recorder=recorder)
     try:
         await app.start()
         if one_shot_prompt:
             await app.ask(one_shot_prompt)
+            await app.close(status="closed", reason="completed")
             return
         await app.repl()
-    finally:
-        await app.close()
+        await app.close(status="closed", reason="completed")
+    except Exception as exc:
+        await app.close(status="failed", reason=str(exc))
+        raise
 
 
-def run_sync(config: PukConfig, one_shot_prompt: str | None = None) -> None:
-    asyncio.run(run_app(config, one_shot_prompt=one_shot_prompt))
+def run_sync(
+    config: PukConfig,
+    one_shot_prompt: str | None = None,
+    append_to_run: str | None = None,
+    argv: list[str] | None = None,
+) -> None:
+    recorder = RunRecorder(
+        workspace=Path(config.workspace),
+        mode="oneshot" if one_shot_prompt else "repl",
+        llm=config.llm,
+        append_to_run=append_to_run,
+        argv=argv or [],
+    )
+    asyncio.run(run_app(config, one_shot_prompt=one_shot_prompt, recorder=recorder))

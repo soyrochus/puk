@@ -13,6 +13,13 @@ from puk.config import log_resolved_llm_config, resolve_llm_config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="puk", description="Minimal Copilot SDK REPL")
     parser.add_argument("prompt", nargs="?", help="Optional one-shot prompt for automated mode")
+    parser.add_argument(
+        "-a",
+        "--append-to-run",
+        dest="append_to_run",
+        default=None,
+        help="Append events to existing run id or path under .puk/runs",
+    )
     parser.add_argument("--provider", default=None, help="LLM provider to use")
     parser.add_argument("--model", default=None, help="Model to use with the provider")
     parser.add_argument("--temperature", default=None, type=float, help="LLM temperature override")
@@ -41,7 +48,7 @@ def main() -> None:
         )
         log_resolved_llm_config(resolved)
         config = PukConfig(workspace=args.workspace, llm=resolved.settings)
-        run_sync(config, one_shot_prompt=args.prompt)
+        run_sync(config, one_shot_prompt=args.prompt, append_to_run=args.append_to_run, argv=sys.argv[1:])
     except KeyboardInterrupt:
         print("\nPuk has been interrupted by the user. Back to the burrow.", file=sys.stderr)
         raise SystemExit(130) from None

@@ -7,6 +7,7 @@ from puk.__main__ import build_parser
 def test_parser_defaults():
     args = build_parser().parse_args([])
     assert args.prompt is None
+    assert args.append_to_run is None
     assert args.model is None
     assert args.provider is None
     assert args.temperature is None
@@ -18,6 +19,8 @@ def test_parser_one_shot_prompt():
     args = build_parser().parse_args(
         [
             "find powerpoint python files",
+            "--append-to-run",
+            "abc",
             "--provider",
             "openai",
             "--model",
@@ -31,6 +34,7 @@ def test_parser_one_shot_prompt():
         ]
     )
     assert args.prompt == "find powerpoint python files"
+    assert args.append_to_run == "abc"
     assert args.provider == "openai"
     assert args.model == "gpt-5-mini"
     assert args.temperature == 0.4
@@ -39,7 +43,7 @@ def test_parser_one_shot_prompt():
 
 
 def test_main_handles_keyboard_interrupt(monkeypatch, capsys):
-    def _raise_interrupt(config, one_shot_prompt=None):
+    def _raise_interrupt(config, one_shot_prompt=None, append_to_run=None, argv=None):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(main_mod, "run_sync", _raise_interrupt)

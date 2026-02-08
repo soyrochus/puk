@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from puk.app import PukApp, PukConfig, run_app
 from puk.config import LLMSettings
+from puk.run import RunRecorder
 
 
 class FakeSession:
@@ -79,8 +82,11 @@ class SpyRenderer:
 async def test_run_app_one_shot(monkeypatch):
     fake = FakeClient()
     monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+    recorder = RunRecorder(Path("."), "oneshot", LLMSettings(), None, [])
 
-    await run_app(PukConfig(workspace="."), one_shot_prompt="hello")
+    await run_app(PukConfig(workspace="."), one_shot_prompt="hello", recorder=recorder)
+
+    await run_app(PukConfig(workspace="."), one_shot_prompt="hello", recorder=recorder)
 
     assert fake.started is True
     assert fake.stopped is True
