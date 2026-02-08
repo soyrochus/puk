@@ -1,0 +1,149 @@
+# SPEC-003 - Run as Unit of Execution
+
+## 1. Purpose
+
+Elevate “Run” to a first-class persisted execution unit spanning REPL and one-shot modes. Implement the append-only storage needed to capture session provenance (inputs, context, tool calls, artifacts) so every output is traceable to its originating interaction.
+
+## 2. Scope
+
+In scope:
+- CLI support for creating or appending to runs in both REPL (no positional prompt) and automated one-shot (positional prompt) modes.
+- Run persistence under `.puk/runs/<run_dir>/` with manifest, event log, and artifact storage.
+- Fail-fast validation of `--append-to-run` target.
+- Minimal metadata capture: CLI argv, resolved model/provider parameters, workspace fingerprint, timestamps.
+
+Out of scope (guardrails):
+- Multi-run aggregation, dashboards, or remote storage.
+- Editing or deleting past events; runs remain append-only.
+- Cross-workspace run moves or symlinking.
+- New UI surfaces beyond existing console output.
+
+## 3. Epic Mapping
+
+Maps to backlog Epic 1 “From Chat to Execution Units” (1.1 Introduce Runs as first-class concept) in `backlog-puk.md`.
+
+## 4. Terminology
+
+- **Run**: Persisted record of one coherent execution session (REPL session or one-shot segment).
+- **REPL mode**: `puk` (no positional prompt). Each invocation records the full REPL interaction as one run segment; append mode joins an existing run.
+- **One-shot mode**: `puk "<prompt>"`. Single execution segment recorded to a new or existing run.
+- **Event log**: Append-only `events.ndjson` capturing ordered events for the run.
+- **Artifact**: File or diff produced by the assistant, stored under `artifacts/` and referenced by events.
+
+## 5. CLI Contract
+
+Add flag:
+- `-a, --append-to-run RUN_REF` — append events to an existing run instead of creating a new one.
+
+Behavior matrix:
+- `puk` → REPL; creates new run.
+- `puk --append-to-run <run_ref>` → REPL; appends to existing run.
+- `puk "do X"` → one-shot; creates new run with single execution segment.
+- `puk "do X" --append-to-run <run_ref>` → one-shot; appends this segment to existing run.
+
+Rules:
+- `RUN_REF` accepts either a `run_id` (from manifest) or a direct path to a run directory under `.puk/runs/`.
+- If `RUN_REF` does not resolve to an existing run: fail fast with clear error; never create implicitly when `--append-to-run` is present.
+- Default workspace stays current working directory unless overridden elsewhere (guardrail with existing app behavior).
+- Existing streaming UX and key bindings remain unchanged.
+
+## 6. Storage Layout
+
+```
+.puk/
+  runs/
+    <run_dir>/
+      run.json           # manifest
+      events.ndjson      # append-only event log
+      artifacts/         # generated files, diffs, logs
+```
+
+`<run_dir>`: timestamp prefix (e.g., `2026-02-08T15-04-05Z`) with optional slug derived from title or first prompt (safe for paths). Store the canonical `run_id` in `run.json` and use it for lookup.
+
+## 7. Manifest (`run.json`)
+
+Minimal schema:
+- `run_id` (UUID or similarly unique stable id)
+- `created_at`, `updated_at` (ISO 8601, UTC)
+- `title` (optional slug/text)
+- `status` (`open` | `closed` | `failed`)
+- `workspace` (absolute path); optionally git info (commit, dirty flag) when available
+- `llm`: `{ provider, model, temperature, max_output_tokens }` resolved for the session
+- `mode`: `repl` | `oneshot`
+
+Manifest is created atomically with the run; `updated_at` is refreshed on append.
+
+## 8. Event Log (`events.ndjson`)
+
+Append-only, newline-delimited JSON objects with monotonic timestamps. Required event types:
+- `session.start` — mode, argv snapshot, workspace, run_id, append flag.
+- `input.user` — user text (REPL turn or one-shot prompt).
+- `context.resolved` — references to files/chunks/prior runs used for response.
+- `model.output` — assistant response (include tool plan if present).
+- `tool.call` / `tool.result` — name, params summary, duration.
+- `artifact.write` — path in `artifacts/`, content-type or patch summary, originating turn id.
+- `status.change` — reason and new status (`open|closed|failed`).
+- `session.end` — exit reason (`user_exit`, `completed`, `error`).
+
+Event records must include `timestamp`, `seq` (monotonic integer), and `turn_id` to correlate related events.
+
+## 9. Artifact Handling
+
+- All generated artifacts stored under `<run_dir>/artifacts/`.
+- `artifact.write` events must reference relative artifact path and the triggering `turn_id`.
+- Do not overwrite existing artifacts with the same name; use unique filenames or suffixes.
+- Large artifacts may be written as files with log entries referencing their path; event bodies stay small.
+
+## 10. Status Semantics
+
+- New run starts `open`.
+- REPL: set `closed` on normal exit; `failed` on unhandled exception. If append was used, ensure final status mirrors outcome of the appended session.
+- One-shot: `open → closed` on success, `open → failed` on error.
+- When appending, temporarily mark run `open` during operation; restore to `closed` if previously closed and append succeeds.
+
+## 11. Guardrails (current app constraints to respect unless noted)
+
+- Preserve existing REPL UX (multiline input, Ctrl+J send) and streaming output behavior.
+- Default to Copilot provider pipeline; BYOK routing added in SPEC-002 remains unchanged.
+- Workspace scoping keeps using current working directory; no background daemons or services introduced.
+- Storage confined to `.puk/` under the workspace; no global/stateful services required.
+- App remains CLI-only; no new interactive prompts beyond existing REPL prompts and errors.
+- Append-only invariants: no event deletion or mutation. (New functionality may extend schema but must not break forward read compatibility.)
+
+## 12. Failure Handling
+
+- `--append-to-run` with missing/invalid `RUN_REF` → exit with clear message and non-zero status; do not create a new run.
+- Corrupted manifest or event log → refuse append with actionable error.
+- Event/log writes must be flushed/durable before signaling completion; partial writes should not leave invalid JSON lines (use temp file + append or fsync where available).
+
+## 13. Observability & Debugging
+
+- Log run directory path and run_id at start of invocation.
+- Provide a lightweight `puk --debug-run` (optional helper) or log statement to show resolved run lookup path and status when appending.
+- No secrets (API keys) written to manifest or events; redact when necessary.
+
+## 14. Acceptance Criteria
+
+1) Running `puk` creates a new run directory with `run.json` and `events.ndjson`; status ends `closed` on normal exit.
+2) Running `puk --append-to-run <existing>` appends REPL events into that run and refreshes `updated_at` while preserving prior events.
+3) Running `puk "do X"` creates a run with one `session.start`, `input.user`, `model.output`, `session.end` sequence and status `closed`.
+4) `--append-to-run` with a non-existent `run_id` or path fails fast with a clear error; no new run is created.
+5) Every `artifact.write` event references a path under `artifacts/` and a `turn_id`, enabling trace from prompt → context → tools → artifact.
+6) Event log remains valid NDJSON after any successful invocation; corrupted logs are detected and block append with error.
+
+## 15. Test Plan
+
+Unit tests:
+- Manifest creation: fields present, status lifecycle, updated_at refresh on append.
+- Run directory naming: timestamp prefix and slug sanitization.
+- Event appends: seq monotonicity; turn_id correlation between input/output/tool/artifact events.
+- Validation: missing `RUN_REF`, invalid `run_id`, corrupt manifest/log rejection.
+- Status transitions for REPL vs one-shot including error paths.
+
+Integration tests:
+- `puk` REPL happy path: creates run, records multiple turns, closes cleanly.
+- `puk --append-to-run <path>` continues an existing run and preserves prior events.
+- One-shot with append: adds a segment to existing run and closes it.
+- Artifact write flow: simulate artifact creation and ensure event references stored file.
+- Concurrency guard: sequential runs cannot open the same run concurrently (lock or check enforced) — expect second attempt to fail.
+- Backward compatibility: running without `--append-to-run` behaves exactly as before (no storage regressions beyond new run creation).
