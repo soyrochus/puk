@@ -2,17 +2,17 @@
 
 > “Puk, who can’t resist poking around and making things better.”
 
-Puk is now a minimal proof-of-concept Copilot SDK app in the `puk` namespace.
+Puk is a local coding assistant built on top of the GitHub Copilot SDK. It treats every session as a first-class **run**—prompts, tool calls, and artifacts are logged under `.puk/runs/…` so you can inspect and append later. You can stay on Copilot defaults or supply your own API keys for BYO providers.
 
 ![puk-small.png](./images/puk-small.png)
 
-## What this first version includes
+## Core features
 
-- Interactive REPL mode (`puk`)
-- Multiline REPL input with explicit send
-- Automated one-shot mode (`puk "your prompt"`) for non-interactive runs
-- GitHub Copilot SDK session wiring with streaming enabled
-- SDK internal tools left enabled (no tool exclusions)
+- Interactive REPL (`puk`) and automated one-shot (`puk "do X"`).
+- Persistent runs: manifest + event log + artifacts in `.puk/runs/…`.
+- Append to an existing run for long-lived sessions.
+- Run inspection from CLI (`puk runs …`) and REPL (`/runs`, `/run <id>`, `/tail <id>`).
+- Copilot SDK by default; BYO providers/config via flags or config files.
 
 ## Install
 
@@ -42,15 +42,45 @@ puk "Find all python files related with powerpoint in this directory tree"
 puk --workspace /path/to/project "Analyze this codebase"
 ```
 
-## Acceptance-criteria scenario
+### Inspecting runs
 
-Start the app in a repo/folder and ask:
-
-```text
-find all pyton files related with powerpoint in a directory tree
+```bash
+puk runs list
+puk runs show <run_id-or-dir>
+puk runs tail <run_id-or-dir> --follow
 ```
 
-The agent will handle the request using Copilot SDK tools available in the session.
+In the REPL you can type `/runs`, `/run <ref>`, or `/tail <ref>` without sending them to the model.
+
+## Command-line options
+
+| Option | Description |
+| --- | --- |
+| `prompt` (positional) | If provided, run one-shot; otherwise start REPL. |
+| `-a, --append-to-run RUN_REF` | Append events to an existing run (by `run_id` or directory under `.puk/runs`). |
+| `--workspace PATH` | Working directory for tools and run storage (defaults to `.`). |
+| `--provider`, `--model`, `--temperature`, `--max-output-tokens` | Override LLM settings (can also come from config). |
+
+Run inspection subcommands:
+
+- `puk runs list [--workspace DIR] [--json]`
+- `puk runs show <run_ref> [--workspace DIR] [--tail N] [--json]`
+- `puk runs tail <run_ref> [--workspace DIR] [--follow] [--limit N]`
+
+## Quick check
+
+Start the app in a repo/folder and ask something simple:
+
+```text
+find all python files
+```
+
+Then view the recorded run:
+
+```bash
+puk runs list
+puk runs show <the-listed-run-id>
+```
 
 ## Testing
 
