@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -11,7 +12,12 @@ from puk.config import log_resolved_llm_config, resolve_llm_config
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="puk", description="Minimal Copilot SDK REPL")
+    parser = argparse.ArgumentParser(
+        prog="puk",
+        description="Minimal Copilot SDK REPL",
+        epilog="Additional commands: `puk runs list|show|tail` for run inspection.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("prompt", nargs="?", help="Optional one-shot prompt for automated mode")
     parser.add_argument(
         "-a",
@@ -33,9 +39,67 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_runs_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="puk runs", description="Inspect recorded runs")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = sub.add_parser("list", help="List runs")
+    list_parser.add_argument("--workspace", default=".", help="Workspace to scan for runs")
+    list_parser.add_argument("--json", action="store_true", help="Emit raw JSON list")
+
+    show_parser = sub.add_parser("show", help="Show run manifest and recent events")
+    show_parser.add_argument("run_ref", help="Run id or directory name")
+    show_parser.add_argument("--workspace", default=".", help="Workspace to scan for runs")
+    show_parser.add_argument("--tail", type=int, default=20, help="Number of events to display")
+    show_parser.add_argument("--json", action="store_true", help="Emit raw events JSON")
+
+    tail_parser = sub.add_parser("tail", help="Stream run events")
+    tail_parser.add_argument("run_ref", help="Run id or directory name")
+    tail_parser.add_argument("--workspace", default=".", help="Workspace to scan for runs")
+    tail_parser.add_argument("--follow", action="store_true", help="Follow for new events")
+    tail_parser.add_argument("--limit", type=int, default=None, help="Maximum events to show")
+
+    return parser
+
+
 def main() -> None:
+    # Dispatch between main run mode and runs subcommands
+    if len(sys.argv) > 1 and sys.argv[1] == "runs":
+        runs_parser = build_runs_parser()
+        args = runs_parser.parse_args(sys.argv[2:])
+        logging.basicConfig(level=os.environ.get("PUK_LOG_LEVEL", "INFO"))
+        from puk import runs as run_inspect
+
+        workspace = Path(getattr(args, "workspace", "."))
+        if args.command == "list":
+            discovered = run_inspect.discover_runs(workspace)
+            if args.json:
+                print(json.dumps([ri.__dict__ | {"dir": str(ri.dir)} for ri in discovered], indent=2))
+            else:
+                print(run_inspect.format_runs_table(discovered))
+            return
+        if args.command == "show":
+            run_dir = run_inspect.resolve_run_ref(workspace, args.run_ref)
+            if args.json:
+                manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                events = run_inspect.load_events(run_dir)
+                print(json.dumps({"manifest": manifest, "events": events[-args.tail :]}, indent=2))
+            else:
+                print(run_inspect.format_run_show(run_dir, tail=args.tail))
+            return
+        if args.command == "tail":
+            run_dir = run_inspect.resolve_run_ref(workspace, args.run_ref)
+            count = 0
+            for ev in run_inspect.tail_events(run_dir, follow=args.follow):
+                print(json.dumps(ev))
+                count += 1
+                if args.limit and count >= args.limit:
+                    break
+            return
+
     args = build_parser().parse_args()
     logging.basicConfig(level=os.environ.get("PUK_LOG_LEVEL", "INFO"))
+
     try:
         resolved = resolve_llm_config(
             workspace=Path(args.workspace),

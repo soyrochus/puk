@@ -1,7 +1,7 @@
 import pytest
 
 import puk.__main__ as main_mod
-from puk.__main__ import build_parser
+from puk.__main__ import build_parser, build_runs_parser
 
 
 def test_parser_defaults():
@@ -40,6 +40,13 @@ def test_parser_one_shot_prompt():
     assert args.temperature == 0.4
     assert args.max_output_tokens == 512
     assert args.workspace == "/tmp/project"
+
+
+def test_runs_list_subcommand():
+    parser = build_runs_parser()
+    args = parser.parse_args(["list", "--workspace", "/tmp/ws"])
+    assert args.command == "list"
+    assert args.workspace == "/tmp/ws"
 
 
 def test_main_handles_keyboard_interrupt(monkeypatch, capsys):

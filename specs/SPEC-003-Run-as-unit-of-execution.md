@@ -122,6 +122,19 @@ Event records must include `timestamp`, `seq` (monotonic integer), and `turn_id`
 - Provide a lightweight `puk --debug-run` (optional helper) or log statement to show resolved run lookup path and status when appending.
 - No secrets (API keys) written to manifest or events; redact when necessary.
 
+## 14. Run Inspection (CLI + REPL)
+
+- CLI subcommands under `puk runs`:
+  - `puk runs list [--workspace DIR] [--json]` — list runs with `run_id`, status, mode, updated_at, title, dir.
+  - `puk runs show <run_ref> [--workspace DIR] [--tail N] [--json]` — show manifest summary plus last N events; `--json` returns manifest + events.
+  - `puk runs tail <run_ref> [--workspace DIR] [--follow] [--limit N]` — stream NDJSON events (follow optional).
+- REPL slash commands (client-side, never sent to the model):
+  - `/runs` — equivalent to `runs list` for current workspace.
+  - `/run <id|dir>` — equivalent to `runs show <ref> --tail 20`.
+  - `/tail <id|dir>` — equivalent to `runs tail <ref>` (non-follow).
+- Run references resolve by directory name or `run_id` lookup inside `.puk/runs/`.
+- Output must be human-readable by default; JSON mode returns raw data for scripting.
+
 ## 14. Acceptance Criteria
 
 1) Running `puk` creates a new run directory with `run.json` and `events.ndjson`; status ends `closed` on normal exit.
@@ -130,6 +143,7 @@ Event records must include `timestamp`, `seq` (monotonic integer), and `turn_id`
 4) `--append-to-run` with a non-existent `run_id` or path fails fast with a clear error; no new run is created.
 5) Every `artifact.write` event references a path under `artifacts/` and a `turn_id`, enabling trace from prompt → context → tools → artifact.
 6) Event log remains valid NDJSON after any successful invocation; corrupted logs are detected and block append with error.
+7) `puk runs list/show/tail` and REPL `/runs`, `/run`, `/tail` render run data without sending commands to the LLM.
 
 ## 15. Test Plan
 
@@ -139,6 +153,7 @@ Unit tests:
 - Event appends: seq monotonicity; turn_id correlation between input/output/tool/artifact events.
 - Validation: missing `RUN_REF`, invalid `run_id`, corrupt manifest/log rejection.
 - Status transitions for REPL vs one-shot including error paths.
+- Run inspection helpers: discovery sorts by `updated_at`; resolve accepts run_id or path; tail yields events.
 
 Integration tests:
 - `puk` REPL happy path: creates run, records multiple turns, closes cleanly.
@@ -147,3 +162,4 @@ Integration tests:
 - Artifact write flow: simulate artifact creation and ensure event references stored file.
 - Concurrency guard: sequential runs cannot open the same run concurrently (lock or check enforced) — expect second attempt to fail.
 - Backward compatibility: running without `--append-to-run` behaves exactly as before (no storage regressions beyond new run creation).
+- CLI `runs list/show/tail` and REPL commands output human-readable data and match manifest/events content; JSON mode matches raw NDJSON.

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import urllib.parse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -17,6 +18,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from puk.config import BYOK_PROVIDERS, LLMSettings
 from puk.run import RunRecorder
+from puk import runs as run_inspect
 from puk.ui import ConsoleRenderer
 
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -221,6 +223,16 @@ class PukApp:
                 stripped = raw.strip()
                 if stripped in {"/exit", "/quit", "quit", "exit"}:
                     return
+                # Local commands (not sent to model)
+                if stripped.startswith("/runs"):
+                    self._cmd_list_runs()
+                    continue
+                if stripped.startswith("/run "):
+                    self._cmd_show_run(stripped.split(" ", 1)[1])
+                    continue
+                if stripped.startswith("/tail "):
+                    self._cmd_tail_run(stripped.split(" ", 1)[1])
+                    continue
                 if stripped:
                     try:
                         await self.ask(raw)
@@ -246,6 +258,26 @@ class PukApp:
                 if selected:
                     _LOG.info("LLM backend selected_model=%s", selected)
                 return
+
+    # ----- local inspection commands -----
+    def _cmd_list_runs(self) -> None:
+        runs = run_inspect.discover_runs(Path(self.config.workspace))
+        print(run_inspect.format_runs_table(runs))
+
+    def _cmd_show_run(self, ref: str) -> None:
+        try:
+            run_dir = run_inspect.resolve_run_ref(Path(self.config.workspace), ref)
+            print(run_inspect.format_run_show(run_dir, tail=20))
+        except Exception as exc:
+            print(f"[runs] {exc}")
+
+    def _cmd_tail_run(self, ref: str) -> None:
+        try:
+            run_dir = run_inspect.resolve_run_ref(Path(self.config.workspace), ref)
+            for ev in run_inspect.tail_events(run_dir, follow=False):
+                print(json.dumps(ev))
+        except Exception as exc:
+            print(f"[runs] {exc}")
 
 
 async def run_app(config: PukConfig, one_shot_prompt: str | None = None, recorder: RunRecorder | None = None) -> None:

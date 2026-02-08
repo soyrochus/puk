@@ -71,7 +71,11 @@ class RunRecorder:
             slug = _safe_slug(title_slug)
             dir_name = f"{_utcnow()}" + (f"-{slug}" if slug else "")
             run_root = runs_root / dir_name
-            run_root.mkdir(parents=True, exist_ok=False)
+            suffix = 1
+            while run_root.exists():
+                run_root = runs_root / f"{dir_name}-{suffix}"
+                suffix += 1
+            run_root.mkdir(parents=True, exist_ok=True)
             self.paths = RunPaths(
                 root=run_root,
                 manifest=run_root / "run.json",

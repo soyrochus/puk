@@ -10,7 +10,9 @@ class ConsoleRenderer:
 
     def show_banner(self) -> None:
         print("Puk REPL")
-        print("Enter for a new line • Ctrl+J to send • Type /exit to quit")
+        print(
+            "Enter for a new line • Ctrl+J to send • Commands: /runs, /run <id>, /tail <id>, /exit to quit"
+        )
 
     def show_tool_event(self, tool_name: str) -> None:
         print(f"\n[tool] {tool_name}")

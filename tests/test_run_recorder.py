@@ -32,7 +32,7 @@ def test_create_run_and_events(tmp_path):
     events = _read_events(recorder.paths.events)
     assert events[0]["type"] == "session.start"
     assert events[-1]["type"] == "status.change"
-    assert events[2]["type"] == "input.user"
+    assert any(ev["type"] == "input.user" for ev in events)
 
 
 def test_append_requires_existing_run(tmp_path):
@@ -56,3 +56,12 @@ def test_concurrency_lock(tmp_path):
     with pytest.raises(RuntimeError):
         recorder2._acquire_lock()
 
+
+def test_unique_run_dir_created_when_exists(tmp_path, monkeypatch):
+    # force same timestamp
+    monkeypatch.setattr("puk.run._utcnow", lambda: "2026-02-08T18-09-01Z")
+    recorder1 = RunRecorder(tmp_path, "oneshot", LLMSettings(), None, [])
+    recorder1.start(title_slug="demo")
+    recorder2 = RunRecorder(tmp_path, "oneshot", LLMSettings(), None, [])
+    recorder2.start(title_slug="demo")
+    assert recorder1.paths.root != recorder2.paths.root

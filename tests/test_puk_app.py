@@ -80,18 +80,20 @@ class SpyRenderer:
 
 @pytest.mark.asyncio
 async def test_run_app_one_shot(monkeypatch):
-    fake = FakeClient()
-    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
-    recorder = RunRecorder(Path("."), "oneshot", LLMSettings(), None, [])
+    fake1 = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake1)
+    recorder1 = RunRecorder(Path("."), "oneshot", LLMSettings(), None, [])
+    await run_app(PukConfig(workspace="."), one_shot_prompt="hello", recorder=recorder1)
+    assert fake1.started is True
+    assert fake1.stopped is True
+    assert fake1.session.prompts == ["hello"]
 
-    await run_app(PukConfig(workspace="."), one_shot_prompt="hello", recorder=recorder)
-
-    await run_app(PukConfig(workspace="."), one_shot_prompt="hello", recorder=recorder)
-
-    assert fake.started is True
-    assert fake.stopped is True
-    assert fake.session.prompts == ["hello"]
-    assert fake.configs[0]["excluded_tools"] == []
+    fake2 = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake2)
+    recorder2 = RunRecorder(Path("."), "oneshot", LLMSettings(), None, [])
+    await run_app(PukConfig(workspace="."), one_shot_prompt="hello", recorder=recorder2)
+    assert fake2.session.prompts == ["hello"]
+    assert fake1.configs[0]["excluded_tools"] == []
 
 
 def test_session_config_contains_workspace_and_system_message(monkeypatch):
