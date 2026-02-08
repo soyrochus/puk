@@ -430,9 +430,7 @@ The SDK supports: default Copilot subscription via Copilot CLI, and BYOK provide
 [llm]
 provider = "copilot"             # "copilot" | "openai" | "azure" | "anthropic"
 model = "gpt-5"                  # provider-specific model string
-fallback_provider = ""           # optional, same enum as provider
-fallback_model = ""              # optional
-api_key_env = ""                 # e.g. "OPENAI_API_KEY" (required for BYOK)
+api_key = ""                     # API key value (required for BYOK)
 azure_endpoint = ""              # required if provider="azure"
 azure_api_version = "2024-02-15-preview"
 max_output_tokens = 2048         # upper bound; enforce in session config where possible
@@ -442,9 +440,8 @@ temperature = 0.2                # optional; only if SDK/provider supports it
 Validation rules:
 
 * If `provider="copilot"`, BYOK fields are ignored.
-* If `provider!="copilot"`, `api_key_env` must be set and present in environment at runtime.
+* If `provider!="copilot"`, `api_key` must be set.
 * If `provider="azure"`, `azure_endpoint` must be set.
-* If `fallback_provider` is set, it must include required fields too.
 
 #### 15.2.4 Session behavior
 

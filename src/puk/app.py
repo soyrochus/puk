@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import re
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -11,7 +15,11 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
+from puk.config import BYOK_PROVIDERS, LLMSettings
 from puk.ui import ConsoleRenderer
+
+_ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_LOG = logging.getLogger("puk")
 
 
 def _auto_approve_permission(request: dict, metadata: dict) -> dict:
@@ -41,8 +49,48 @@ class Renderer(Protocol):
 
 @dataclass
 class PukConfig:
-    model: str = "gpt-5"
     workspace: str = "."
+    llm: LLMSettings = LLMSettings()
+
+
+def _looks_like_env_var_name(value: str) -> bool:
+    return bool(_ENV_NAME_PATTERN.match(value))
+
+
+def _resolve_api_key(settings: LLMSettings) -> str:
+    env_value = os.environ.get(settings.api_key)
+    if env_value:
+        return env_value
+    # Backward-compatible fallback: allow direct key in config when value is not env-var-like.
+    if not _looks_like_env_var_name(settings.api_key):
+        return settings.api_key
+    raise ValueError(
+        f"Environment variable '{settings.api_key}' is not set for provider '{settings.provider}'."
+    )
+
+
+def _provider_config(settings: LLMSettings) -> dict | None:
+    if settings.provider == "copilot":
+        return None
+    if settings.provider not in BYOK_PROVIDERS:
+        raise ValueError(f"Unsupported provider '{settings.provider}'.")
+    api_key = _resolve_api_key(settings)
+    if settings.provider == "azure":
+        parsed = urllib.parse.urlparse(settings.azure_endpoint)
+        base_url = settings.azure_endpoint.rstrip("/")
+        if parsed.scheme and parsed.netloc and "/openai/deployments/" in parsed.path:
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+        return {
+            "type": "azure",
+            "base_url": base_url,
+            "api_key": api_key,
+            "azure": {"api_version": settings.azure_api_version},
+        }
+    if settings.provider == "openai":
+        return {"type": "openai", "base_url": "https://api.openai.com/v1", "api_key": api_key}
+    if settings.provider == "anthropic":
+        return {"type": "anthropic", "base_url": "https://api.anthropic.com", "api_key": api_key}
+    raise ValueError(f"Unsupported provider '{settings.provider}'.")
 
 
 class PukApp:
@@ -52,16 +100,24 @@ class PukApp:
         self.session = None
         self.renderer: Renderer = ConsoleRenderer()
         self._awaiting_response = False
+        self._effective_model = config.llm.model
 
     def session_config(self) -> dict:
-        return {
-            "model": self.config.model,
+        config = {
             "streaming": True,
             "working_directory": str(Path(self.config.workspace).resolve()),
             "excluded_tools": [],  # keep internal SDK tools enabled
             "system_message": {"content": DEFAULT_SYSTEM_PROMPT},
             "on_permission_request": _auto_approve_permission,
+            "temperature": self.config.llm.temperature,
+            "max_output_tokens": self.config.llm.max_output_tokens,
         }
+        if self._effective_model:
+            config["model"] = self._effective_model
+        provider = _provider_config(self.config.llm)
+        if provider is not None:
+            config["provider"] = provider
+        return config
 
     def _on_event(self, event: SessionEvent) -> None:
         # Debug: uncomment to see all events
@@ -80,8 +136,8 @@ class PukApp:
             self.renderer.show_tool_event(name)
         elif event.type == SessionEventType.SESSION_ERROR:
             self._mark_response_started()
-            msg = event.data.message if event.data.message else "Unknown error"
-            print(f"\n[error] {msg}")
+            # Errors are surfaced via send_and_wait exceptions; avoid duplicate prints here.
+            pass
         elif event.type == SessionEventType.TOOL_USER_REQUESTED:
             # User confirmation requested for a tool - auto-approve handled by permission handler
             pass
@@ -90,14 +146,30 @@ class PukApp:
         await self.client.start()
         self.session = await self.client.create_session(self.session_config())
         self.session.on(self._on_event)
+        await self._log_backend_selected_model()
 
     async def ask(self, prompt: str) -> None:
         self._awaiting_response = True
         self.renderer.show_working()
         try:
             await self.session.send_and_wait({"prompt": prompt}, timeout=600)
+        except Exception as exc:
+            raise RuntimeError(self._user_facing_error(exc)) from None
         finally:
             self._mark_response_started()
+
+    def _user_facing_error(self, exc: Exception) -> str:
+        message = str(exc)
+        if (
+            self.config.llm.provider == "azure"
+            and not self.config.llm.model
+            and "No model available" in message
+        ):
+            return (
+                "Azure returned 'No model available' for model=<auto>. "
+                "No model is being passed by Puk for Azure; check Azure endpoint policy/config."
+            )
+        return message
 
     def _mark_response_started(self) -> None:
         if not self._awaiting_response:
@@ -124,12 +196,28 @@ class PukApp:
                 if stripped in {"/exit", "/quit", "quit", "exit"}:
                     return
                 if stripped:
-                    await self.ask(raw)
+                    try:
+                        await self.ask(raw)
+                    except RuntimeError as exc:
+                        print(f"\n[error] {exc}")
 
     async def close(self) -> None:
         if self.session is not None:
             await self.session.destroy()
         await self.client.stop()
+
+    async def _log_backend_selected_model(self) -> None:
+        """Log backend-confirmed selected model from session.start, when available."""
+        try:
+            messages = await self.session.get_messages()
+        except Exception:
+            return
+        for message in reversed(messages):
+            if message.type == SessionEventType.SESSION_START:
+                selected = getattr(message.data, "selected_model", None)
+                if selected:
+                    _LOG.info("LLM backend selected_model=%s", selected)
+                return
 
 
 async def run_app(config: PukConfig, one_shot_prompt: str | None = None) -> None:

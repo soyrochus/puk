@@ -61,10 +61,8 @@ Based on `example.puk.toml`, implement support for:
 ```toml
 [llm]
 provider = "copilot"          # "copilot" | "openai" | "azure" | "anthropic"
-model = "gpt-5"
-fallback_provider = ""
-fallback_model = ""
-api_key_env = "OPENAI_API_KEY"
+model = "gpt-5"               # required for openai/anthropic; optional for azure/copilot
+api_key = "OPENAI_API_KEY"
 azure_endpoint = ""
 azure_api_version = "2024-02-15-preview"
 max_output_tokens = 2048
@@ -74,14 +72,14 @@ temperature = 0.2
 ## 7. Validation Rules
 
 - `provider` must be one of: `copilot`, `openai`, `azure`, `anthropic`.
-- `model` must be a non-empty string.
-- `fallback_provider` must be empty or one of supported providers.
-- If `fallback_provider` is set, `fallback_model` must be non-empty.
+- `model` must be non-empty for `openai` and `anthropic`.
+- For `azure`, `model` may be omitted when deployment/model selection is implicit in endpoint, environment, or backend service configuration.
+- For `copilot`, `model` may be omitted to use backend default model selection.
 - `temperature` must be numeric and in `[0.0, 2.0]`.
 - `max_output_tokens` must be a positive integer.
 - For `azure` provider, `azure_endpoint` must be non-empty.
 - For non-azure providers, `azure_*` keys may exist but are ignored.
-- `api_key_env` must be non-empty for BYOK providers (`openai`, `azure`, `anthropic`).
+- `api_key` must be non-empty for BYOK providers (`openai`, `azure`, `anthropic`).
 
 Validation failures must be fail-fast with clear actionable messages.
 
@@ -89,8 +87,7 @@ Validation failures must be fail-fast with clear actionable messages.
 
 - If provider is `copilot`, continue using Copilot SDK path.
 - If provider is BYOK (`openai`, `azure`, `anthropic`), route through the corresponding backend abstraction layer.
-- If primary provider initialization fails and fallback is configured, attempt fallback once.
-- If both fail, return a user-readable error indicating tried providers/models.
+- If provider initialization fails, fail fast with a user-readable error indicating provider/model.
 
 ## 9. Parameters Layer
 
@@ -108,7 +105,6 @@ If a parameter override is provided, it always wins over workspace/global/defaul
 Expose effective resolved LLM config (with provenance) via debug/log output:
 
 - Final provider/model selected.
-- Whether fallback is configured.
 - Config source for each effective key: `default`, `global`, `workspace`, or `parameter`.
 
 Never print API key values; only print env var names (for example `OPENAI_API_KEY`).
@@ -119,7 +115,7 @@ Never print API key values; only print env var names (for example `OPENAI_API_KE
 2. Effective config precedence is exactly: `default -> global -> workspace -> parameters`.
 3. Only `[llm]` is implemented from `example.puk.toml`; other sections are ignored by this spec.
 4. Invalid `[llm]` values fail fast with clear error messages.
-5. BYOK provider selection works through runtime abstraction with optional fallback behavior.
+5. BYOK provider selection works through runtime abstraction with fail-fast behavior.
 6. Existing Copilot default path remains functional when no BYOK overrides are supplied.
 
 ## 12. Test Plan
@@ -128,11 +124,9 @@ Never print API key values; only print env var names (for example `OPENAI_API_KE
   - Merge precedence per key across all 4 layers.
   - Validation for provider, model, temperature, max tokens.
   - Azure-specific required endpoint behavior.
-  - Fallback preconditions and fallback attempt path.
 - Integration tests:
   - No config present -> defaults used.
   - Global only -> global values used.
   - Global + workspace -> workspace wins.
   - Parameter overrides -> parameters win over all file values.
   - Invalid workspace config -> startup fails with explicit message.
-

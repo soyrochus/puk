@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from puk.app import PukApp, PukConfig, run_app
+from puk.config import LLMSettings
 
 
 class FakeSession:
@@ -17,8 +18,20 @@ class FakeSession:
     async def send_and_wait(self, payload, timeout=None):
         self.prompts.append(payload["prompt"])
 
+    async def get_messages(self):
+        return []
+
     async def destroy(self):
         self.destroyed = True
+
+
+class ErrorSession(FakeSession):
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    async def send_and_wait(self, payload, timeout=None):
+        raise Exception(self.message)
 
 
 class FakeClient:
@@ -87,6 +100,64 @@ def test_session_config_contains_workspace_and_system_message(monkeypatch):
     assert "working_directory" in cfg
 
 
+def test_session_config_omits_model_for_copilot_auto(monkeypatch):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+
+    app = PukApp(PukConfig(workspace=".", llm=LLMSettings(provider="copilot", model="")))
+    cfg = app.session_config()
+
+    assert "model" not in cfg
+
+
+def test_session_config_includes_azure_provider(monkeypatch):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-azure-key")
+    app = PukApp(
+        PukConfig(
+            workspace=".",
+            llm=LLMSettings(
+                provider="azure",
+                model="gpt-5",
+                api_key="AZURE_OPENAI_API_KEY",
+                azure_endpoint="https://example.openai.azure.com",
+                azure_api_version="2024-02-15-preview",
+            ),
+        )
+    )
+
+    cfg = app.session_config()
+
+    assert cfg["model"] == "gpt-5"
+    assert cfg["provider"] == {
+        "type": "azure",
+        "base_url": "https://example.openai.azure.com",
+        "api_key": "test-azure-key",
+        "azure": {"api_version": "2024-02-15-preview"},
+    }
+
+
+def test_session_config_fails_for_missing_byok_env_var(monkeypatch):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+    monkeypatch.delenv("MISSING_AZURE_KEY", raising=False)
+    app = PukApp(
+        PukConfig(
+            workspace=".",
+            llm=LLMSettings(
+                provider="azure",
+                model="gpt-5",
+                api_key="MISSING_AZURE_KEY",
+                azure_endpoint="https://example.openai.azure.com",
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="Environment variable 'MISSING_AZURE_KEY' is not set"):
+        app.session_config()
+
+
 @pytest.mark.asyncio
 async def test_ask_shows_and_hides_working_indicator(monkeypatch):
     fake = FakeClient()
@@ -99,3 +170,48 @@ async def test_ask_shows_and_hides_working_indicator(monkeypatch):
     await app.ask("hello")
 
     assert renderer.calls == ["show_working", "hide_working"]
+
+
+@pytest.mark.asyncio
+async def test_ask_azure_auto_model_error_has_clear_guidance(monkeypatch):
+    fake = FakeClient()
+    fake.session = ErrorSession(
+        "Session error: Execution failed: Error: No model available. Check policy enablement under GitHub Settings > Copilot"
+    )
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+    app = PukApp(
+        PukConfig(
+            workspace=".",
+            llm=LLMSettings(
+                provider="azure",
+                model="",
+                api_key="AZURE_OPENAI_API_KEY",
+                azure_endpoint="https://example.openai.azure.com",
+            ),
+        )
+    )
+    app.session = fake.session
+
+    with pytest.raises(RuntimeError, match="No model is being passed by Puk for Azure"):
+        await app.ask("hello")
+
+
+def test_session_config_allows_azure_without_explicit_model(monkeypatch):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-azure-key")
+
+    app = PukApp(
+        PukConfig(
+            workspace=".",
+            llm=LLMSettings(
+                provider="azure",
+                model="",
+                api_key="AZURE_OPENAI_API_KEY",
+                azure_endpoint="https://example.openai.azure.com",
+            ),
+        )
+    )
+
+    cfg = app.session_config()
+    assert "model" not in cfg

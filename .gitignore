@@ -12,4 +12,5 @@ wheels/
 # Local config and data files
 .puk.config
 .puk/
+.puk.toml
 

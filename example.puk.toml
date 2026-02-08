@@ -36,12 +36,11 @@ deny_globs = ["**/.env", "**/*secret*", "**/*key*", "**/*.pem"]
 # Provider: "copilot" or BYOK: "openai" | "azure" | "anthropic"
 provider = "copilot"
 # Model name (provider-specific).
+# For Azure, set this to your deployment name (for example: "my-gpt4o-deployment").
+# Leave empty to let the backend auto-select a model/deployment.
 model = "gpt-5"
-# Optional fallback provider/model.
-fallback_provider = ""
-fallback_model = ""
-# For BYOK: name of env var that holds API key.
-api_key_env = "OPENAI_API_KEY"
+# For BYOK: API key value or env-var name.
+api_key = "OPENAI_API_KEY"
 # For Azure: endpoint URL and API version.
 azure_endpoint = ""
 azure_api_version = "2024-02-15-preview"
