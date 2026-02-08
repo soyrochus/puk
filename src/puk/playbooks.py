@@ -125,7 +125,7 @@ def is_path_within_scope(path: str, workspace: Path, write_scope: list[str]) -> 
             return True
         if pattern.endswith("/**"):
             base = pattern[:-3].rstrip("/")
-            if base and rel.startswith(f"{base}/"):
+            if base and (rel == base or rel.startswith(f"{base}/")):
                 return True
     return False
 

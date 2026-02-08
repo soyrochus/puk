@@ -24,6 +24,20 @@ def _safe_slug(text: str | None, max_len: int = 32) -> str:
     return cleaned[:max_len]
 
 
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class RunPaths:
     root: Path
@@ -139,8 +153,36 @@ class RunRecorder:
     def record_model_output(self, text: str, turn_id: int) -> None:
         self._append_event("model.output", {"text": text}, turn_id=turn_id)
 
-    def record_tool_call(self, name: str, turn_id: int) -> None:
-        self._append_event("tool.call", {"name": name}, turn_id=turn_id)
+    def record_tool_call(
+        self,
+        name: str,
+        turn_id: int | None,
+        tool_call_id: str | None = None,
+        arguments: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {"name": name}
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
+        if arguments:
+            payload["arguments"] = arguments
+        self._append_event("tool.call", payload, turn_id=turn_id)
+
+    def record_tool_result(
+        self,
+        name: str,
+        turn_id: int | None,
+        tool_call_id: str | None = None,
+        success: bool | None = None,
+        result: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {"name": name}
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
+        if success is not None:
+            payload["success"] = success
+        if result:
+            payload["result"] = result
+        self._append_event("tool.result", payload, turn_id=turn_id)
 
     def record_artifact(self, relative_path: str, turn_id: int, summary: str | None = None) -> None:
         self._append_event(
@@ -158,10 +200,14 @@ class RunRecorder:
             return
         try:
             self._lock_handle = self.paths.lock.open("x")
-            self._lock_handle.write(str(os.getpid()))
-            self._lock_handle.flush()
         except FileExistsError as exc:
-            raise RuntimeError(f"Run {self.paths.root} is already in use; concurrency is not allowed.") from exc
+            if not self._try_recover_stale_lock():
+                raise RuntimeError(
+                    f"Run {self.paths.root} is already in use; concurrency is not allowed."
+                ) from exc
+            self._lock_handle = self.paths.lock.open("x")
+        self._lock_handle.write(str(os.getpid()))
+        self._lock_handle.flush()
 
     def _release_lock(self) -> None:
         if self._lock_handle:
@@ -171,6 +217,24 @@ class RunRecorder:
                 self.paths.lock.unlink()
             except OSError:
                 pass
+
+    def _try_recover_stale_lock(self) -> bool:
+        if not self.paths or not self.paths.lock.exists():
+            return False
+        try:
+            owner_pid = self.paths.lock.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        stale = True
+        if owner_pid.isdigit():
+            stale = not _pid_is_alive(int(owner_pid))
+        if not stale:
+            return False
+        try:
+            self.paths.lock.unlink()
+            return True
+        except OSError:
+            return False
 
     def _resolve_existing_run(self, runs_root: Path, ref: str) -> tuple[RunPaths, dict[str, Any]]:
         candidate = Path(ref)

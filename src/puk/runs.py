@@ -157,7 +157,19 @@ def format_run_show(run_dir: Path, tail: int | None = 20) -> str:
         elif ev.get("type") == "artifact.write":
             summary = f"{data.get('path','')}"
         elif ev.get("type") == "tool.call":
-            summary = data.get("name", "")
+            parts = [data.get("name", "")]
+            if data.get("tool_call_id"):
+                parts.append(f"id={data.get('tool_call_id')}")
+            if data.get("arguments"):
+                parts.append(f"args={_shorten(str(data.get('arguments')), 60)}")
+            summary = " ".join(part for part in parts if part)
+        elif ev.get("type") == "tool.result":
+            parts = [data.get("name", "")]
+            if "success" in data:
+                parts.append(f"success={data.get('success')}")
+            if data.get("result"):
+                parts.append(_shorten(str(data.get("result")), 60))
+            summary = " ".join(part for part in parts if part)
         line = f"{ev.get('seq')} [{ev.get('timestamp')}] {ev.get('type')} (turn {ev.get('turn_id')}): {summary}"
         lines.append(line)
     return "\n".join(lines)

@@ -1,7 +1,7 @@
 ---
 id: reveng_docs_multistack_v0
 name: "Reverse-engineer Project Documentation (Python/Node/Java + React/Angular)"
-version: "0.1"
+version: "0.1.0"
 status: "draft"
 owner: "Puk"
 tags: ["reverse-engineering", "documentation", "multistack", "copilot-sdk"]
@@ -9,6 +9,79 @@ description: >
   Generate technical and inferred functional documentation by scanning a repository’s source tree.
   Uses only default Copilot SDK tools (filesystem + git if available). Produces docs incrementally
   in parts to prevent context overflow. Final step assembles a coherent documentation bundle in /docs.
+parameters:
+  repo_root:
+    type: path
+    default: "."
+    description: Root directory to scan.
+  output_dir:
+    type: path
+    default: "docs"
+    description: Directory to write documentation parts.
+  functional_sources:
+    type: string
+    default: ""
+    description: Comma-separated list of functional source paths (files or directories).
+  include_globs:
+    type: string
+    default: "**/*"
+    description: Comma-separated include globs.
+  exclude_globs:
+    type: string
+    default: "**/.git/**,**/node_modules/**,**/dist/**,**/build/**,**/target/**,**/.venv/**,**/venv/**,**/__pycache__/**"
+    description: Comma-separated exclude globs.
+  max_file_size_kb:
+    type: int
+    default: 512
+    description: Skip files larger than this size in KB.
+  max_files_per_chunk:
+    type: int
+    default: 200
+    description: Chunk size for incremental scanning.
+  max_read_files_per_section:
+    type: int
+    default: 80
+    description: Hard guardrail to avoid context overflow per section.
+  diagram_format:
+    type: enum
+    default: mermaid
+    enum_values: [mermaid, text]
+    description: Diagram output format.
+  frontend_focus:
+    type: enum
+    default: auto
+    enum_values: [auto, react, angular, none]
+    description: Frontend framework focus.
+  backend_focus:
+    type: enum
+    default: auto
+    enum_values: [auto, python, node, java, mixed]
+    description: Backend stack focus.
+allowed_tools:
+  - view
+  - edit
+  - list_directory
+  - read_file
+  - write_file
+  - edit_file
+  - create_file
+  - grep_search
+  - glob_search
+  - Read
+  - Edit
+  - "List directory"
+  - grep
+  - glob
+  - fs.read
+  - fs.write
+  - search
+  - git.status
+  - git.show
+  - git.log
+  - git.rev_parse
+write_scope:
+  - "docs/**"
+run_mode: apply
 ---
 
 # Playbook: Reverse-engineer Project Documentation (Incremental, Context-safe)

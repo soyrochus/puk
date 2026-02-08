@@ -128,6 +128,9 @@ def main() -> None:
             )
         except (ValueError, PlaybookValidationError) as exc:
             raise SystemExit(str(exc)) from None
+        except KeyboardInterrupt:
+            print("\nPuk run was interrupted by the user.", file=sys.stderr)
+            raise SystemExit(130) from None
         return
     if len(sys.argv) > 1 and sys.argv[1] == "runs":
         runs_parser = build_runs_parser()

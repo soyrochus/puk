@@ -19,6 +19,7 @@ def run_playbook_sync(
     append_to_run: str | None,
     argv: list[str],
 ) -> None:
+    _prepare_output_directory(parameters, workspace)
     recorder = RunRecorder(
         workspace=workspace,
         mode=mode,
@@ -74,8 +75,9 @@ async def _run_playbook(
             {"plan_artifact": plan_ref, "unreviewed": plan_ref is None},
         )
         await app.close(status="closed", reason="completed")
-    except Exception as exc:
-        await app.close(status="failed", reason=str(exc))
+    except BaseException as exc:
+        reason = "interrupted by user" if isinstance(exc, KeyboardInterrupt) else str(exc)
+        await app.close(status="failed", reason=reason)
         raise
 
 
@@ -99,10 +101,34 @@ def _build_prompt(playbook: Playbook, parameters: dict[str, Any], mode: str) -> 
         f"Parameters:\n{param_lines}\n"
         f"Allowed tools: {', '.join(playbook.allowed_tools)}\n"
         f"Write scope: {', '.join(playbook.write_scope)}\n"
+        "Runtime note: Parameter values have already been resolved and validated by the runner.\n"
+        "Do not perform separate permission/probe checks; proceed directly with the playbook steps.\n"
+        "Use directory-oriented tools for directories and file-oriented tools for files.\n"
+        "Do not use file-view tools on directory paths (for example repo_root or output_dir).\n"
+        "For repository enumeration, use glob/list-directory style tools.\n"
         f"{mode_block}\n"
         "Playbook instructions:\n"
         f"{rendered_body}\n"
     )
+
+
+def _prepare_output_directory(parameters: dict[str, Any], workspace: Path) -> None:
+    raw_output_dir = parameters.get("output_dir")
+    if not raw_output_dir:
+        return
+    output_dir = Path(str(raw_output_dir))
+    if not output_dir.is_absolute():
+        output_dir = (workspace / output_dir).resolve()
+    if output_dir.exists() and not output_dir.is_dir():
+        raise PlaybookValidationError(
+            f"output_dir '{output_dir}' exists but is not a directory."
+        )
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        raise PlaybookValidationError(
+            f"Unable to create output_dir '{output_dir}': {exc}"
+        ) from exc
 
 
 def _persist_plan(recorder: RunRecorder, output: str) -> None:

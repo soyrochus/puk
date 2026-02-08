@@ -6,6 +6,7 @@ import pytest
 
 from puk.playbooks import (
     PlaybookValidationError,
+    is_path_within_scope,
     load_playbook,
     resolve_parameters,
 )
@@ -96,3 +97,11 @@ Body.
     playbook = load_playbook(_write_playbook(tmp_path, content))
     with pytest.raises(PlaybookValidationError, match="resolve within the workspace"):
         resolve_parameters(playbook.parameters, {"target": "../outside"}, tmp_path)
+
+
+def test_is_path_within_scope_allows_base_directory_for_recursive_glob(tmp_path: Path):
+    assert is_path_within_scope("docs", tmp_path, ["docs/**"]) is True
+
+
+def test_is_path_within_scope_rejects_outside_paths(tmp_path: Path):
+    assert is_path_within_scope("../docs", tmp_path, ["docs/**"]) is False

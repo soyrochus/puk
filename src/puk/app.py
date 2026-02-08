@@ -32,7 +32,7 @@ def _auto_approve_permission(request: dict, metadata: dict) -> dict:
 
 
 def _deny_permission(reason: str) -> dict:
-    return {"kind": "denied", "reason": reason}
+    return {"kind": "denied-interactively-by-user", "reason": reason}
 
 
 def _extract_tool_name(request: dict, metadata: dict) -> str:
@@ -62,6 +62,65 @@ def _extract_paths(request: dict, metadata: dict) -> list[str]:
 def _tool_may_write(tool_name: str) -> bool:
     lowered = tool_name.lower()
     return any(token in lowered for token in ("write", "append", "edit", "create", "mkdir", "rm", "delete"))
+
+
+def _truncate(text: str, limit: int = 240) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _summarize_json(value: object, limit: int = 240) -> str:
+    try:
+        return _truncate(json.dumps(value, ensure_ascii=True, sort_keys=True), limit=limit)
+    except Exception:
+        return _truncate(str(value), limit=limit)
+
+
+def _coerce_turn_id(raw: object) -> int | None:
+    if raw is None:
+        return None
+    try:
+        text = str(raw).strip()
+        if not text:
+            return None
+        return int(text)
+    except Exception:
+        return None
+
+
+def _extract_error_message(raw_error: object) -> str:
+    if raw_error is None:
+        return ""
+    if isinstance(raw_error, str):
+        return raw_error
+    message = getattr(raw_error, "message", None)
+    if message:
+        return str(message)
+    return str(raw_error)
+
+
+def _summarize_tool_result_data(data: object) -> tuple[bool | None, str | None]:
+    success = getattr(data, "success", None)
+    error = _extract_error_message(getattr(data, "error", None))
+    result_obj = getattr(data, "result", None)
+    result_text = ""
+    if result_obj is not None:
+        detailed = getattr(result_obj, "detailed_content", None)
+        content = getattr(result_obj, "content", None)
+        if detailed:
+            result_text = str(detailed)
+        elif content:
+            result_text = str(content)
+        else:
+            result_text = str(result_obj)
+    if error:
+        summary = f"error: {error}"
+    elif result_text:
+        summary = result_text
+    else:
+        summary = None
+    return success, (_truncate(summary, 400) if summary else None)
 
 
 DEFAULT_SYSTEM_PROMPT = """You are Puk, a pragmatic local coding assistant.
@@ -146,17 +205,31 @@ class PukApp:
         self._output_buffer: list[str] = []
         self._capture_output = False
         self._last_output: str | None = None
+        self._last_tool_name: str | None = None
+        self._identical_tool_streak = 0
+        self._max_identical_tool_calls = self._read_positive_int_env(
+            "PUK_MAX_IDENTICAL_TOOL_CALLS", default=120
+        )
 
     def session_config(self) -> dict:
+        excluded_tools = []
+        if self.config.allowed_tools is not None:
+            allowed_lower = {name.strip().lower() for name in self.config.allowed_tools}
+            # Prevent shell fallback when a playbook does not allow bash.
+            if "bash" not in allowed_lower:
+                excluded_tools.append("bash")
         config = {
             "streaming": True,
             "working_directory": str(Path(self.config.workspace).resolve()),
-            "excluded_tools": [],  # keep internal SDK tools enabled
+            "excluded_tools": excluded_tools,
             "system_message": {"content": DEFAULT_SYSTEM_PROMPT},
             "on_permission_request": self._permission_handler(),
             "temperature": self.config.llm.temperature,
             "max_output_tokens": self.config.llm.max_output_tokens,
         }
+        if self.config.allowed_tools is not None:
+            # Prefer SDK-native allowlisting so unavailable tools are hidden from the model.
+            config["available_tools"] = self.config.allowed_tools
         if self._effective_model:
             config["model"] = self._effective_model
         provider = _provider_config(self.config.llm)
@@ -165,12 +238,7 @@ class PukApp:
         return config
 
     def _permission_handler(self):
-        if (
-            self.config.execution_mode == "plan"
-            or self.config.allowed_tools is not None
-            or self.config.write_scope is not None
-        ):
-            allowed = set(self.config.allowed_tools or [])
+        if self.config.execution_mode == "plan" or self.config.write_scope is not None:
             write_scope = self.config.write_scope or []
             workspace = Path(self.config.workspace)
 
@@ -178,8 +246,6 @@ class PukApp:
                 tool_name = _extract_tool_name(request, metadata)
                 if self.config.execution_mode == "plan":
                     return _deny_permission("Tool execution is disabled in plan mode.")
-                if self.config.allowed_tools is not None and tool_name not in allowed:
-                    return _deny_permission(f"Tool '{tool_name}' is not allowed for this playbook.")
                 if self.config.write_scope is not None and _tool_may_write(tool_name):
                     paths = _extract_paths(request, metadata)
                     if not paths:
@@ -199,13 +265,18 @@ class PukApp:
         # print(f"[DEBUG] {event.type}")
         if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
             self._mark_response_started()
+            self._reset_tool_loop_state()
             chunk = event.data.delta_content
             if chunk:
                 self.renderer.write_delta(chunk)
                 if (self.run_recorder or self._capture_output) and self._active_turn_id is not None:
                     self._output_buffer.append(chunk)
+        elif event.type == SessionEventType.ASSISTANT_REASONING_DELTA:
+            self._mark_response_started()
+            self._reset_tool_loop_state()
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
             self._mark_response_started()
+            self._reset_tool_loop_state()
             self.renderer.end_message()
             if self.run_recorder and self._active_turn_id is not None:
                 text = "".join(self._output_buffer)
@@ -218,9 +289,37 @@ class PukApp:
         elif event.type == SessionEventType.TOOL_EXECUTION_START:
             self._mark_response_started()
             name = event.data.tool_name or "unknown"
+            tool_call_id = event.data.tool_call_id
+            arguments = (
+                _summarize_json(event.data.arguments)
+                if getattr(event.data, "arguments", None) is not None
+                else None
+            )
             self.renderer.show_tool_event(name)
+            turn_id = self._resolve_turn_id(event.data.turn_id)
             if self.run_recorder:
-                self.run_recorder.record_tool_call(name=name, turn_id=self._active_turn_id)
+                self.run_recorder.record_tool_call(
+                    name=name,
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    arguments=arguments,
+                )
+            self._record_tool_streak(name)
+            if self._max_identical_tool_calls and self._identical_tool_streak > self._max_identical_tool_calls:
+                raise RuntimeError(
+                    f"Tool loop guard triggered after {self._identical_tool_streak} consecutive '{name}' calls."
+                )
+        elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
+            success, result = _summarize_tool_result_data(event.data)
+            turn_id = self._resolve_turn_id(event.data.turn_id)
+            if self.run_recorder:
+                self.run_recorder.record_tool_result(
+                    name=event.data.tool_name or "unknown",
+                    turn_id=turn_id,
+                    tool_call_id=event.data.tool_call_id,
+                    success=success,
+                    result=result,
+                )
         elif event.type == SessionEventType.SESSION_ERROR:
             self._mark_response_started()
             # Errors are surfaced via send_and_wait exceptions; avoid duplicate prints here.
@@ -253,6 +352,7 @@ class PukApp:
         self._output_buffer = []
         self._capture_output = capture
         self._last_output = None
+        self._reset_tool_loop_state()
         if self.run_recorder:
             self.run_recorder.record_user_input(prompt, turn_id=turn_id, context_items=context_items)
         self.renderer.show_working()
@@ -284,6 +384,38 @@ class PukApp:
             return
         self._awaiting_response = False
         self.renderer.hide_working()
+
+    def _resolve_turn_id(self, event_turn_id: object) -> int | None:
+        if self._active_turn_id is not None:
+            return self._active_turn_id
+        parsed = _coerce_turn_id(event_turn_id)
+        if parsed is not None:
+            return parsed
+        if self.run_recorder and self.run_recorder.turn_id > 0:
+            return self.run_recorder.turn_id
+        return None
+
+    def _record_tool_streak(self, tool_name: str) -> None:
+        if tool_name == self._last_tool_name:
+            self._identical_tool_streak += 1
+        else:
+            self._last_tool_name = tool_name
+            self._identical_tool_streak = 1
+
+    def _reset_tool_loop_state(self) -> None:
+        self._last_tool_name = None
+        self._identical_tool_streak = 0
+
+    def _read_positive_int_env(self, name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            _LOG.warning("Ignoring invalid %s=%r (expected integer).", name, raw)
+            return default
+        return max(0, value)
 
     async def repl(self) -> None:
         self.renderer.show_banner()
@@ -370,8 +502,9 @@ async def run_app(config: PukConfig, one_shot_prompt: str | None = None, recorde
             return
         await app.repl()
         await app.close(status="closed", reason="completed")
-    except Exception as exc:
-        await app.close(status="failed", reason=str(exc))
+    except BaseException as exc:
+        reason = "interrupted by user" if isinstance(exc, KeyboardInterrupt) else str(exc)
+        await app.close(status="failed", reason=reason)
         raise
 
 

@@ -57,6 +57,21 @@ def test_concurrency_lock(tmp_path):
         recorder2._acquire_lock()
 
 
+def test_stale_lock_is_recovered(tmp_path):
+    recorder1 = RunRecorder(tmp_path, "oneshot", LLMSettings(), None, [])
+    recorder1.start()
+    paths = recorder1.paths
+    assert paths is not None
+    recorder1._release_lock()
+
+    paths.lock.write_text("999999", encoding="utf-8")
+    recorder2 = RunRecorder(tmp_path, "oneshot", LLMSettings(), recorder1.run_id, [])
+    recorder2.paths = paths
+    recorder2._acquire_lock()
+    assert recorder2._lock_handle is not None
+    recorder2._release_lock()
+
+
 def test_unique_run_dir_created_when_exists(tmp_path, monkeypatch):
     # force same timestamp
     monkeypatch.setattr("puk.run._utcnow", lambda: "2026-02-08T18-09-01Z")
@@ -65,3 +80,43 @@ def test_unique_run_dir_created_when_exists(tmp_path, monkeypatch):
     recorder2 = RunRecorder(tmp_path, "oneshot", LLMSettings(), None, [])
     recorder2.start(title_slug="demo")
     assert recorder1.paths.root != recorder2.paths.root
+
+
+def test_tool_call_and_result_events_include_metadata(tmp_path):
+    recorder = RunRecorder(
+        workspace=tmp_path,
+        mode="oneshot",
+        llm=LLMSettings(),
+        append_to_run=None,
+        argv=["puk"],
+    )
+    recorder.start(title_slug="demo")
+    turn_id = recorder.next_turn_id()
+    recorder.record_tool_call(
+        name="view",
+        turn_id=turn_id,
+        tool_call_id="call_123",
+        arguments='{"path":"README.md"}',
+    )
+    recorder.record_tool_result(
+        name="view",
+        turn_id=turn_id,
+        tool_call_id="call_123",
+        success=True,
+        result="ok",
+    )
+    recorder.close(status="closed", reason="completed")
+
+    events = _read_events(recorder.paths.events)
+    tool_call = next(ev for ev in events if ev["type"] == "tool.call")
+    tool_result = next(ev for ev in events if ev["type"] == "tool.result")
+
+    assert tool_call["turn_id"] == turn_id
+    assert tool_call["data"]["name"] == "view"
+    assert tool_call["data"]["tool_call_id"] == "call_123"
+    assert tool_call["data"]["arguments"] == '{"path":"README.md"}'
+    assert tool_result["turn_id"] == turn_id
+    assert tool_result["data"]["name"] == "view"
+    assert tool_result["data"]["tool_call_id"] == "call_123"
+    assert tool_result["data"]["success"] is True
+    assert tool_result["data"]["result"] == "ok"
