@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.0",
     "prompt_toolkit",
     "github-copilot-sdk",
+    "pyyaml",
 ]
 
 [project.scripts]
