@@ -2,17 +2,17 @@
 
 > “Puk, who can’t resist poking around and making things better.”
 
-Puk is a local coding assistant built on top of the GitHub Copilot SDK. It treats every session as a first-class **run**—prompts, tool calls, and artifacts are logged under `.puk/runs/…` so you can inspect and append later. You can stay on Copilot defaults or supply your own API keys for BYO providers.
+Puk is a local coding assistant built on top of the GitHub Copilot SDK, extended with first-class runs and playbooks. It goes beyond a plain chat shell by adding persistent execution logs, plan/apply automation, scoped writes, and run inspection tooling.
 
 ![puk-small.png](./images/puk-small.png)
 
 ## Core features
 
-- Interactive REPL (`puk`) and automated one-shot (`puk "do X"`).
-- Persistent runs: manifest + event log + artifacts in `.puk/runs/…`.
-- Append to an existing run for long-lived sessions.
-- Run inspection from CLI (`puk runs …`) and REPL (`/runs`, `/run <id>`, `/tail <id>`).
-- Copilot SDK by default; BYO providers/config via flags or config files.
+- Copilot SDK runtime by default, with optional BYO providers via config or CLI overrides.
+- Playbooks as repeatable automation units (`puk run ...`) with parameters, `plan/apply`, and tool/write scoping.
+- Interactive REPL (`puk`) and automated one-shot execution (`puk "..."`).
+- Persistent run records in `.puk/runs/...` (inputs, tool calls, outputs, artifacts), with append support.
+- Run inspection from CLI (`puk runs ...`) and REPL shortcuts (`/runs`, `/run <id>`, `/tail <id>`).
 
 ## Install
 
@@ -42,6 +42,51 @@ puk "Find all python files related with powerpoint in this directory tree"
 puk --workspace /path/to/project "Analyze this codebase"
 ```
 
+### Playbooks
+
+Playbooks are repeatable automation flows defined as Markdown files with YAML front-matter
+(`id`, `parameters`, `allowed_tools`, `write_scope`, `run_mode`).
+
+Run a playbook:
+
+```bash
+puk run playbooks/reverse-engineer-docs.md
+```
+
+Run in plan mode (no file writes):
+
+```bash
+puk run playbooks/reverse-engineer-docs.md --mode plan
+```
+
+Apply mode with parameters:
+
+```bash
+puk run playbooks/reverse-engineer-docs.md \
+  --mode apply \
+  --param repo_root=src/puk \
+  --param functional_sources=README.md,specs
+```
+
+Common notes:
+- Parameter values for `path` types must resolve within `--workspace`.
+- `reverse-engineer-docs.md` writes within `docs/**` by default.
+- Runs are recorded under `.puk/runs/...` and can be inspected with `puk runs ...`.
+
+Expected outputs for `playbooks/reverse-engineer-docs.md`:
+- `docs/00_index.md`
+- `docs/README.md`
+- `docs/10_overview.md`
+- `docs/15_functional_sources.md`
+- `docs/20_architecture.md`
+- `docs/30_backend_api.md`
+- `docs/40_data_model.md`
+- `docs/50_frontend_ui.md`
+- `docs/60_user_flows.md`
+- `docs/70_ops_and_runtime.md`
+- `docs/80_open_questions.md`
+- `docs/90_appendix_inventory.md`
+
 ### Inspecting runs
 
 ```bash
@@ -60,6 +105,10 @@ In the REPL you can type `/runs`, `/run <ref>`, or `/tail <ref>` without sending
 | `-a, --append-to-run RUN_REF` | Append events to an existing run (by `run_id` or directory under `.puk/runs`). |
 | `--workspace PATH` | Working directory for tools and run storage (defaults to `.`). |
 | `--provider`, `--model`, `--temperature`, `--max-output-tokens` | Override LLM settings (can also come from config). |
+
+Playbook command:
+
+- `puk run <playbook_path> [--param key=value ...] [--mode plan|apply] [--workspace DIR] [-a RUN_REF]`
 
 Run inspection subcommands:
 
