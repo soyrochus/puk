@@ -128,6 +128,14 @@ def main() -> None:
             )
         except (ValueError, PlaybookValidationError) as exc:
             raise SystemExit(str(exc)) from None
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
+        except FileNotFoundError as exc:
+            if exc.filename == "copilot":
+                raise SystemExit(
+                    "The `copilot` CLI binary was not found. Install GitHub Copilot CLI first."
+                ) from exc
+            raise
         except KeyboardInterrupt:
             print("\nPuk run was interrupted by the user.", file=sys.stderr)
             raise SystemExit(130) from None

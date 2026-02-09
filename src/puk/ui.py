@@ -15,13 +15,28 @@ class ConsoleRenderer:
         )
 
     def show_tool_event(self, tool_name: str) -> None:
-        print(f"\n[tool] {tool_name}")
+        print(f"[tool] {tool_name}")
+
+    def show_tool_result(self, tool_name: str, success: bool | None, summary: str | None) -> None:
+        if success is True:
+            status = "ok"
+        elif success is False:
+            status = "error"
+        else:
+            status = "done"
+        parts = [f"[tool] {tool_name}", status]
+        if summary:
+            compact = " ".join(summary.strip().split())
+            if len(compact) > 180:
+                compact = compact[:177] + "..."
+            parts.append(compact)
+        print(" ".join(parts))
 
     def show_working(self) -> None:
         if self._thinking_visible:
             return
         self._thinking_visible = True
-        print("\nPuk is thinking...", end="", flush=True)
+        print("Puk is thinking...", end="", flush=True)
 
     def hide_working(self) -> None:
         if not self._thinking_visible:

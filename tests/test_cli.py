@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 import puk.__main__ as main_mod
 from puk.__main__ import build_parser, build_run_parser, build_runs_parser
@@ -86,3 +87,41 @@ def test_main_handles_keyboard_interrupt(monkeypatch, capsys):
     assert exc.value.code == 130
     captured = capsys.readouterr()
     assert "Puk has been interrupted by the user." in captured.err
+
+
+def test_run_main_handles_runtime_error_without_traceback(monkeypatch):
+    monkeypatch.setattr(main_mod, "resolve_llm_config", lambda workspace, parameters: SimpleNamespace(settings=object()))
+    monkeypatch.setattr(main_mod, "log_resolved_llm_config", lambda resolved: None)
+    monkeypatch.setattr(main_mod, "load_playbook", lambda path: SimpleNamespace(parameters={}, run_mode="apply"))
+    monkeypatch.setattr(main_mod, "parse_param_assignments", lambda values: {})
+    monkeypatch.setattr(main_mod, "resolve_parameters", lambda specs, raw, workspace: {})
+
+    def _raise_runtime(*args, **kwargs):
+        raise RuntimeError("Timeout after 600s waiting for session.idle")
+
+    monkeypatch.setattr(main_mod, "run_playbook_sync", _raise_runtime)
+    monkeypatch.setattr("sys.argv", ["puk", "run", "playbooks/reverse-engineer-docs.md"])
+
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+
+    assert str(exc.value) == "Timeout after 600s waiting for session.idle"
+
+
+def test_run_main_handles_missing_copilot_binary(monkeypatch):
+    monkeypatch.setattr(main_mod, "resolve_llm_config", lambda workspace, parameters: SimpleNamespace(settings=object()))
+    monkeypatch.setattr(main_mod, "log_resolved_llm_config", lambda resolved: None)
+    monkeypatch.setattr(main_mod, "load_playbook", lambda path: SimpleNamespace(parameters={}, run_mode="apply"))
+    monkeypatch.setattr(main_mod, "parse_param_assignments", lambda values: {})
+    monkeypatch.setattr(main_mod, "resolve_parameters", lambda specs, raw, workspace: {})
+
+    def _raise_fnf(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "copilot")
+
+    monkeypatch.setattr(main_mod, "run_playbook_sync", _raise_fnf)
+    monkeypatch.setattr("sys.argv", ["puk", "run", "playbooks/reverse-engineer-docs.md"])
+
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+
+    assert str(exc.value) == "The `copilot` CLI binary was not found. Install GitHub Copilot CLI first."

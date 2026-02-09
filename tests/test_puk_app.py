@@ -67,6 +67,9 @@ class SpyRenderer:
     def show_tool_event(self, tool_name):
         pass
 
+    def show_tool_result(self, tool_name, success, summary):
+        pass
+
     def show_working(self):
         self.calls.append("show_working")
 
@@ -145,6 +148,32 @@ def test_session_config_keeps_bash_available_when_playbook_allows_it(monkeypatch
     assert cfg["available_tools"] == ["glob", "bash"]
 
 
+def test_session_config_normalizes_tool_aliases_and_adds_compatibility_tools(monkeypatch):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+
+    app = PukApp(
+        PukConfig(
+            workspace=".",
+            allowed_tools=["Read", "write_file", "mkdir", "grep_search", "List directory"],
+        )
+    )
+    cfg = app.session_config()
+
+    assert cfg["available_tools"] == [
+        "read_file",
+        "write_file",
+        "create_directory",
+        "grep",
+        "list_directory",
+    ]
+    tool_names = [tool.name for tool in cfg.get("tools", [])]
+    assert "read_file" in tool_names
+    assert "write_file" in tool_names
+    assert "create_directory" in tool_names
+    assert "list_directory" in tool_names
+
+
 def test_permission_handler_does_not_block_read_requests_for_allowed_tools_mode(monkeypatch):
     fake = FakeClient()
     monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
@@ -154,6 +183,24 @@ def test_permission_handler_does_not_block_read_requests_for_allowed_tools_mode(
 
     result = handler({"kind": "read", "path": "README.md"}, {})
     assert result["kind"] == "approved"
+
+
+def test_permission_handler_denies_edit_for_missing_target(monkeypatch, tmp_path: Path):
+    fake = FakeClient()
+    monkeypatch.setattr("puk.app.CopilotClient", lambda: fake)
+
+    app = PukApp(
+        PukConfig(
+            workspace=str(tmp_path),
+            allowed_tools=["edit", "write_file", "create_directory"],
+            write_scope=["docs/**"],
+        )
+    )
+    handler = app._permission_handler()
+
+    result = handler({"tool_name": "edit", "path": "docs/missing.md"}, {})
+    assert result["kind"] == "denied-interactively-by-user"
+    assert "does not exist" in result["reason"]
 
 
 def test_permission_handler_denies_plan_mode_with_valid_kind(monkeypatch):
@@ -303,7 +350,7 @@ def test_on_event_records_tool_call_and_result():
     complete_event = SimpleNamespace(
         type=SessionEventType.TOOL_EXECUTION_COMPLETE,
         data=SimpleNamespace(
-            tool_name="view",
+            tool_name=None,
             tool_call_id="call_1",
             turn_id="7",
             success=True,
@@ -346,4 +393,29 @@ def test_tool_loop_guard_raises_on_repeated_identical_calls(monkeypatch):
     app._on_event(event)
     app._on_event(event)
     with pytest.raises(RuntimeError, match="Tool loop guard triggered"):
+        app._on_event(event)
+
+
+def test_tool_failure_loop_guard_raises_on_repeated_identical_failures(monkeypatch):
+    monkeypatch.setenv("PUK_MAX_IDENTICAL_TOOL_FAILURES", "2")
+    app = PukApp(PukConfig(workspace="."))
+    app.renderer = SpyRenderer()
+    app.run_recorder = RecorderSpy(turn_id=1)
+    app._active_turn_id = 1
+
+    event = SimpleNamespace(
+        type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+        data=SimpleNamespace(
+            tool_name="edit",
+            tool_call_id="call_1",
+            turn_id="1",
+            success=False,
+            error="ENOENT",
+            result=SimpleNamespace(content="error: ENOENT", detailed_content=None),
+        ),
+    )
+
+    app._on_event(event)
+    app._on_event(event)
+    with pytest.raises(RuntimeError, match="Tool failure loop guard triggered"):
         app._on_event(event)

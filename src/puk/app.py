@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Protocol
 
 from copilot import CopilotClient
+from copilot.tools import define_tool
+from copilot.types import Tool
 from copilot.generated.session_events import SessionEvent, SessionEventType
+from pydantic import BaseModel, Field
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -24,6 +27,52 @@ from puk.ui import ConsoleRenderer
 
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _LOG = logging.getLogger("puk")
+
+_TOOL_ALIASES: dict[str, str] = {
+    "read": "read_file",
+    "read_file": "read_file",
+    "fs.read": "read_file",
+    "view": "view",
+    "edit": "edit",
+    "edit_file": "edit",
+    "fs.write": "write_file",
+    "write_file": "write_file",
+    "create_file": "create_file",
+    "create_directory": "create_directory",
+    "mkdir": "create_directory",
+    "list directory": "list_directory",
+    "list_directory": "list_directory",
+    "ls": "list_directory",
+    "glob_search": "glob",
+    "grep_search": "grep",
+}
+
+
+class _PathParams(BaseModel):
+    path: str = Field(description="Path relative to workspace or absolute path within workspace")
+
+
+class _CreateFileParams(BaseModel):
+    path: str = Field(description="File path to create")
+    content: str = Field(default="", description="Initial file content")
+
+
+class _WriteFileParams(BaseModel):
+    path: str = Field(description="File path to write")
+    content: str = Field(description="Content to write")
+    append: bool = Field(default=False, description="Append instead of overwrite")
+
+
+class _ReadFileParams(BaseModel):
+    path: str = Field(description="File path to read")
+    start_line: int | None = Field(default=None, ge=1, description="1-based inclusive start line")
+    end_line: int | None = Field(default=None, ge=1, description="1-based inclusive end line")
+
+
+class _ListDirectoryParams(BaseModel):
+    path: str = Field(default=".", description="Directory path to list")
+    recursive: bool = Field(default=False, description="Recursively list contents")
+    max_entries: int = Field(default=200, ge=1, le=5000, description="Maximum entries to return")
 
 
 def _auto_approve_permission(request: dict, metadata: dict) -> dict:
@@ -62,6 +111,17 @@ def _extract_paths(request: dict, metadata: dict) -> list[str]:
 def _tool_may_write(tool_name: str) -> bool:
     lowered = tool_name.lower()
     return any(token in lowered for token in ("write", "append", "edit", "create", "mkdir", "rm", "delete"))
+
+
+def _normalize_tool_name(name: str) -> str:
+    normalized = " ".join(name.strip().split())
+    lowered = normalized.lower()
+    return _TOOL_ALIASES.get(lowered, lowered.replace(" ", "_"))
+
+
+def _tool_requires_existing_target(tool_name: str) -> bool:
+    lowered = _normalize_tool_name(tool_name)
+    return lowered in {"edit"}
 
 
 def _truncate(text: str, limit: int = 240) -> str:
@@ -133,6 +193,8 @@ class Renderer(Protocol):
     def show_banner(self) -> None: ...
 
     def show_tool_event(self, tool_name: str) -> None: ...
+
+    def show_tool_result(self, tool_name: str, success: bool | None, summary: str | None) -> None: ...
 
     def show_working(self) -> None: ...
 
@@ -207,14 +269,22 @@ class PukApp:
         self._last_output: str | None = None
         self._last_tool_name: str | None = None
         self._identical_tool_streak = 0
+        self._tool_name_by_call_id: dict[str, str] = {}
+        self._last_tool_failure_signature: str | None = None
+        self._identical_tool_failure_streak = 0
         self._max_identical_tool_calls = self._read_positive_int_env(
             "PUK_MAX_IDENTICAL_TOOL_CALLS", default=120
         )
+        self._max_identical_tool_failures = self._read_positive_int_env(
+            "PUK_MAX_IDENTICAL_TOOL_FAILURES", default=8
+        )
 
     def session_config(self) -> dict:
+        normalized_tools: list[str] | None = None
         excluded_tools = []
         if self.config.allowed_tools is not None:
-            allowed_lower = {name.strip().lower() for name in self.config.allowed_tools}
+            normalized_tools = self._normalize_allowed_tools(self.config.allowed_tools)
+            allowed_lower = {name.strip().lower() for name in normalized_tools}
             # Prevent shell fallback when a playbook does not allow bash.
             if "bash" not in allowed_lower:
                 excluded_tools.append("bash")
@@ -227,9 +297,12 @@ class PukApp:
             "temperature": self.config.llm.temperature,
             "max_output_tokens": self.config.llm.max_output_tokens,
         }
-        if self.config.allowed_tools is not None:
+        if normalized_tools is not None:
             # Prefer SDK-native allowlisting so unavailable tools are hidden from the model.
-            config["available_tools"] = self.config.allowed_tools
+            config["available_tools"] = normalized_tools
+            compatibility_tools = self._build_compatibility_tools(normalized_tools)
+            if compatibility_tools:
+                config["tools"] = compatibility_tools
         if self._effective_model:
             config["model"] = self._effective_model
         provider = _provider_config(self.config.llm)
@@ -243,7 +316,7 @@ class PukApp:
             workspace = Path(self.config.workspace)
 
             def _handler(request: dict, metadata: dict) -> dict:
-                tool_name = _extract_tool_name(request, metadata)
+                tool_name = _normalize_tool_name(_extract_tool_name(request, metadata))
                 if self.config.execution_mode == "plan":
                     return _deny_permission("Tool execution is disabled in plan mode.")
                 if self.config.write_scope is not None and _tool_may_write(tool_name):
@@ -255,6 +328,15 @@ class PukApp:
                             return _deny_permission(
                                 f"Path '{path}' is outside the allowed write scope."
                             )
+                        if _tool_requires_existing_target(tool_name):
+                            resolved = Path(path)
+                            if not resolved.is_absolute():
+                                resolved = (workspace / resolved).resolve()
+                            if not resolved.exists():
+                                return _deny_permission(
+                                    f"Target path '{path}' does not exist for tool '{tool_name}'. "
+                                    "Use create_file/write_file/create_directory first."
+                                )
                 return {"kind": "approved"}
 
             return _handler
@@ -277,6 +359,8 @@ class PukApp:
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
             self._mark_response_started()
             self._reset_tool_loop_state()
+            self._tool_name_by_call_id = {}
+            self._reset_tool_failure_state()
             self.renderer.end_message()
             if self.run_recorder and self._active_turn_id is not None:
                 text = "".join(self._output_buffer)
@@ -290,6 +374,8 @@ class PukApp:
             self._mark_response_started()
             name = event.data.tool_name or "unknown"
             tool_call_id = event.data.tool_call_id
+            if tool_call_id:
+                self._tool_name_by_call_id[tool_call_id] = name
             arguments = (
                 _summarize_json(event.data.arguments)
                 if getattr(event.data, "arguments", None) is not None
@@ -312,11 +398,17 @@ class PukApp:
         elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
             success, result = _summarize_tool_result_data(event.data)
             turn_id = self._resolve_turn_id(event.data.turn_id)
+            tool_call_id = event.data.tool_call_id
+            name = event.data.tool_name or self._tool_name_by_call_id.get(tool_call_id) or "unknown"
+            if tool_call_id:
+                self._tool_name_by_call_id.pop(tool_call_id, None)
+            self.renderer.show_tool_result(name, success, result)
+            self._record_tool_failure(name, success, result)
             if self.run_recorder:
                 self.run_recorder.record_tool_result(
-                    name=event.data.tool_name or "unknown",
+                    name=name,
                     turn_id=turn_id,
-                    tool_call_id=event.data.tool_call_id,
+                    tool_call_id=tool_call_id,
                     success=success,
                     result=result,
                 )
@@ -352,7 +444,9 @@ class PukApp:
         self._output_buffer = []
         self._capture_output = capture
         self._last_output = None
+        self._tool_name_by_call_id = {}
         self._reset_tool_loop_state()
+        self._reset_tool_failure_state()
         if self.run_recorder:
             self.run_recorder.record_user_input(prompt, turn_id=turn_id, context_items=context_items)
         self.renderer.show_working()
@@ -406,6 +500,33 @@ class PukApp:
         self._last_tool_name = None
         self._identical_tool_streak = 0
 
+    def _record_tool_failure(self, tool_name: str, success: bool | None, result: str | None) -> None:
+        if success is not False:
+            self._reset_tool_failure_state()
+            return
+        snippet = " ".join((result or "").split())
+        if len(snippet) > 180:
+            snippet = snippet[:177] + "..."
+        signature = f"{tool_name}:{snippet}"
+        if signature == self._last_tool_failure_signature:
+            self._identical_tool_failure_streak += 1
+        else:
+            self._last_tool_failure_signature = signature
+            self._identical_tool_failure_streak = 1
+        if (
+            self._max_identical_tool_failures
+            and self._identical_tool_failure_streak > self._max_identical_tool_failures
+        ):
+            raise RuntimeError(
+                "Tool failure loop guard triggered after "
+                f"{self._identical_tool_failure_streak} identical failures from '{tool_name}'. "
+                "This often indicates the model is using an edit tool on a file that does not exist."
+            )
+
+    def _reset_tool_failure_state(self) -> None:
+        self._last_tool_failure_signature = None
+        self._identical_tool_failure_streak = 0
+
     def _read_positive_int_env(self, name: str, default: int) -> int:
         raw = os.environ.get(name)
         if raw is None:
@@ -416,6 +537,143 @@ class PukApp:
             _LOG.warning("Ignoring invalid %s=%r (expected integer).", name, raw)
             return default
         return max(0, value)
+
+    def _normalize_allowed_tools(self, allowed_tools: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for name in allowed_tools:
+            canonical = _normalize_tool_name(name)
+            if not canonical or canonical in seen:
+                continue
+            seen.add(canonical)
+            normalized.append(canonical)
+        return normalized
+
+    def _build_compatibility_tools(self, allowed_tools: list[str]) -> list[Tool]:
+        allowed = set(allowed_tools)
+        tools: list[Tool] = []
+
+        def _create_directory(params: _PathParams, _invocation):
+            target = self._resolve_workspace_path(params.path)
+            self._assert_write_scope(target)
+            target.mkdir(parents=True, exist_ok=True)
+            return f"created directory: {target}"
+
+        def _create_file(params: _CreateFileParams, _invocation):
+            target = self._resolve_workspace_path(params.path)
+            self._assert_write_scope(target)
+            if target.exists():
+                raise FileExistsError(f"Path already exists: {target}")
+            if not target.parent.exists():
+                raise FileNotFoundError(f"Parent directory does not exist: {target.parent}")
+            target.write_text(params.content, encoding="utf-8")
+            return f"created file: {target}"
+
+        def _write_file(params: _WriteFileParams, _invocation):
+            target = self._resolve_workspace_path(params.path)
+            self._assert_write_scope(target)
+            if not target.parent.exists():
+                raise FileNotFoundError(f"Parent directory does not exist: {target.parent}")
+            mode = "a" if params.append else "w"
+            with target.open(mode, encoding="utf-8") as handle:
+                handle.write(params.content)
+            return f"wrote file: {target}"
+
+        def _read_file(params: _ReadFileParams, _invocation):
+            target = self._resolve_workspace_path(params.path)
+            if not target.exists():
+                raise FileNotFoundError(f"Path does not exist: {target}")
+            if target.is_dir():
+                raise IsADirectoryError(f"Path is a directory: {target}")
+            text = target.read_text(encoding="utf-8")
+            if params.start_line is None and params.end_line is None:
+                return text
+            lines = text.splitlines()
+            start_idx = (params.start_line - 1) if params.start_line is not None else 0
+            end_idx = params.end_line if params.end_line is not None else len(lines)
+            return "\n".join(lines[start_idx:end_idx])
+
+        def _list_directory(params: _ListDirectoryParams, _invocation):
+            target = self._resolve_workspace_path(params.path)
+            if not target.exists():
+                raise FileNotFoundError(f"Path does not exist: {target}")
+            if not target.is_dir():
+                raise NotADirectoryError(f"Path is not a directory: {target}")
+            entries = (
+                sorted(target.rglob("*")) if params.recursive else sorted(target.iterdir())
+            )[: params.max_entries]
+            workspace = Path(self.config.workspace).resolve()
+            lines = []
+            for entry in entries:
+                rel = entry.relative_to(workspace)
+                suffix = "/" if entry.is_dir() else ""
+                lines.append(f"{rel.as_posix()}{suffix}")
+            return "\n".join(lines)
+
+        if "create_directory" in allowed:
+            tools.append(
+                define_tool(
+                    name="create_directory",
+                    description="Create a directory path inside the workspace.",
+                    handler=_create_directory,
+                    params_type=_PathParams,
+                )
+            )
+        if "create_file" in allowed:
+            tools.append(
+                define_tool(
+                    name="create_file",
+                    description="Create a new file with optional initial content.",
+                    handler=_create_file,
+                    params_type=_CreateFileParams,
+                )
+            )
+        if "write_file" in allowed:
+            tools.append(
+                define_tool(
+                    name="write_file",
+                    description="Write or append file content. Creates the file if missing.",
+                    handler=_write_file,
+                    params_type=_WriteFileParams,
+                )
+            )
+        if "read_file" in allowed:
+            tools.append(
+                define_tool(
+                    name="read_file",
+                    description="Read a file from the workspace, optionally by line range.",
+                    handler=_read_file,
+                    params_type=_ReadFileParams,
+                )
+            )
+        if "list_directory" in allowed:
+            tools.append(
+                define_tool(
+                    name="list_directory",
+                    description="List directory contents from the workspace.",
+                    handler=_list_directory,
+                    params_type=_ListDirectoryParams,
+                )
+            )
+        return tools
+
+    def _resolve_workspace_path(self, raw_path: str) -> Path:
+        workspace = Path(self.config.workspace).resolve()
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = (workspace / path).resolve()
+        else:
+            path = path.resolve()
+        if not path.is_relative_to(workspace):
+            raise PermissionError(f"Path '{raw_path}' is outside the workspace.")
+        return path
+
+    def _assert_write_scope(self, path: Path) -> None:
+        if self.config.write_scope is None:
+            return
+        workspace = Path(self.config.workspace).resolve()
+        if not is_path_within_scope(str(path), workspace, self.config.write_scope):
+            raise PermissionError(f"Path '{path}' is outside the allowed write scope.")
 
     async def repl(self) -> None:
         self.renderer.show_banner()
@@ -469,6 +727,9 @@ class PukApp:
                 selected = getattr(message.data, "selected_model", None)
                 if selected:
                     _LOG.info("LLM backend selected_model=%s", selected)
+                tools = getattr(message.data, "tools", None)
+                if tools:
+                    _LOG.debug("LLM backend tools=%s", ",".join(tools))
                 return
 
     # ----- local inspection commands -----
