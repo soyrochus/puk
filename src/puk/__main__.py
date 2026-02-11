@@ -6,9 +6,15 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from puk.app import PukConfig, run_sync
-from puk.config import log_resolved_llm_config, resolve_llm_config
+from puk.config import (
+    log_resolved_llm_config,
+    log_resolved_workspace_config,
+    resolve_llm_config,
+    resolve_workspace_config,
+)
 from puk.playbook_runner import run_playbook_sync
 from puk.playbooks import (
     PlaybookValidationError,
@@ -30,6 +36,52 @@ def _add_llm_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_workspace_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--workspace-root", default=None, help="Workspace root override")
+    parser.add_argument(
+        "--workspace-discover-root",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Enable workspace root discovery",
+    )
+    parser.add_argument(
+        "--workspace-allow-outside-root",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Allow paths outside the resolved workspace root",
+    )
+    parser.add_argument(
+        "--workspace-follow-symlinks",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Allow symlink traversal outside the resolved workspace root",
+    )
+    parser.add_argument(
+        "--workspace-max-file-bytes",
+        default=None,
+        type=int,
+        help="Maximum file size allowed for reads",
+    )
+    parser.add_argument(
+        "--workspace-ignore",
+        action="append",
+        default=None,
+        help="Ignored directory names (comma-separated or repeatable)",
+    )
+    parser.add_argument(
+        "--workspace-allow-globs",
+        action="append",
+        default=None,
+        help="Allowed file globs (comma-separated or repeatable)",
+    )
+    parser.add_argument(
+        "--workspace-deny-globs",
+        action="append",
+        default=None,
+        help="Denied file globs (comma-separated or repeatable)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="puk",
@@ -46,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append events to existing run id or path under .puk/runs",
     )
     _add_llm_args(parser)
+    _add_workspace_args(parser)
     parser.add_argument("--workspace", default=".", help="Root directory for agent tools")
     return parser
 
@@ -69,6 +122,7 @@ def build_run_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--workspace", default=".", help="Root directory for agent tools")
     _add_llm_args(parser)
+    _add_workspace_args(parser)
     return parser
 
 
@@ -103,6 +157,12 @@ def main() -> None:
         logging.basicConfig(level=os.environ.get("PUK_LOG_LEVEL", "INFO"))
         workspace = Path(getattr(args, "workspace", "."))
         try:
+            workspace_params = _workspace_param_overrides(args)
+            resolved_workspace = resolve_workspace_config(
+                workspace=workspace,
+                parameters=workspace_params,
+            )
+            log_resolved_workspace_config(resolved_workspace)
             resolved = resolve_llm_config(
                 workspace=workspace,
                 parameters={
@@ -115,15 +175,23 @@ def main() -> None:
             log_resolved_llm_config(resolved)
             playbook = load_playbook(Path(args.playbook_path))
             raw_params = parse_param_assignments(args.param)
-            parameters = resolve_parameters(playbook.parameters, raw_params, workspace)
+            effective_workspace = Path(resolved_workspace.settings.root)
+            parameters = resolve_parameters(
+                playbook.parameters,
+                raw_params,
+                effective_workspace,
+                allow_outside_root=resolved_workspace.settings.allow_outside_root,
+                follow_symlinks=resolved_workspace.settings.follow_symlinks,
+            )
             mode = args.mode or playbook.run_mode
             run_playbook_sync(
-                workspace=workspace,
+                workspace=effective_workspace,
                 playbook=playbook,
                 mode=mode,
                 parameters=parameters,
                 llm=resolved.settings,
                 append_to_run=args.append_to_run,
+                workspace_settings=resolved_workspace.settings,
                 argv=sys.argv[1:],
             )
         except (ValueError, PlaybookValidationError) as exc:
@@ -177,6 +245,12 @@ def main() -> None:
     logging.basicConfig(level=os.environ.get("PUK_LOG_LEVEL", "INFO"))
 
     try:
+        workspace_params = _workspace_param_overrides(args)
+        resolved_workspace = resolve_workspace_config(
+            workspace=Path(args.workspace),
+            parameters=workspace_params,
+        )
+        log_resolved_workspace_config(resolved_workspace)
         resolved = resolve_llm_config(
             workspace=Path(args.workspace),
             parameters={
@@ -187,7 +261,11 @@ def main() -> None:
             },
         )
         log_resolved_llm_config(resolved)
-        config = PukConfig(workspace=args.workspace, llm=resolved.settings)
+        config = PukConfig(
+            workspace=resolved_workspace.settings.root,
+            llm=resolved.settings,
+            workspace_settings=resolved_workspace.settings,
+        )
         run_sync(config, one_shot_prompt=args.prompt, append_to_run=args.append_to_run, argv=sys.argv[1:])
     except KeyboardInterrupt:
         print("\nPuk has been interrupted by the user. Back to the burrow.", file=sys.stderr)
@@ -204,3 +282,28 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _workspace_param_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "workspace_root": args.workspace_root,
+        "workspace_discover_root": args.workspace_discover_root,
+        "workspace_allow_outside_root": args.workspace_allow_outside_root,
+        "workspace_follow_symlinks": args.workspace_follow_symlinks,
+        "workspace_max_file_bytes": args.workspace_max_file_bytes,
+        "workspace_ignore": _split_list_args(args.workspace_ignore),
+        "workspace_allow_globs": _split_list_args(args.workspace_allow_globs),
+        "workspace_deny_globs": _split_list_args(args.workspace_deny_globs),
+    }
+
+
+def _split_list_args(values: list[str] | None) -> list[str] | None:
+    if not values:
+        return None
+    items: list[str] = []
+    for value in values:
+        for item in value.split(","):
+            item = item.strip()
+            if item:
+                items.append(item)
+    return items or None

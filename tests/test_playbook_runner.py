@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from puk.config import WorkspaceSettings
 from puk.playbook_runner import _build_prompt, _prepare_output_directory
 from puk.playbooks import PlaybookValidationError
 from puk.playbooks import Playbook
@@ -33,7 +34,7 @@ def test_prepare_output_directory_creates_missing_dir(tmp_path: Path) -> None:
     target = tmp_path / "docs"
     assert not target.exists()
 
-    _prepare_output_directory({"output_dir": str(target)}, tmp_path)
+    _prepare_output_directory({"output_dir": str(target)}, tmp_path, WorkspaceSettings())
 
     assert target.is_dir()
 
@@ -43,4 +44,4 @@ def test_prepare_output_directory_rejects_file_target(tmp_path: Path) -> None:
     target.write_text("not a directory", encoding="utf-8")
 
     with pytest.raises(PlaybookValidationError, match="not a directory"):
-        _prepare_output_directory({"output_dir": str(target)}, tmp_path)
+        _prepare_output_directory({"output_dir": str(target)}, tmp_path, WorkspaceSettings())

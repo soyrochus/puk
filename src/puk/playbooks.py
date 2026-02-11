@@ -76,6 +76,9 @@ def resolve_parameters(
     specs: dict[str, ParameterSpec],
     raw_params: dict[str, str],
     workspace: Path,
+    *,
+    allow_outside_root: bool = False,
+    follow_symlinks: bool = False,
 ) -> dict[str, Any]:
     unknown = [key for key in raw_params if key not in specs]
     if unknown:
@@ -90,7 +93,13 @@ def resolve_parameters(
             raise PlaybookValidationError(f"Missing required parameter '{name}'.")
         else:
             continue
-        resolved[name] = _convert_param_value(spec, value, workspace)
+        resolved[name] = _convert_param_value(
+            spec,
+            value,
+            workspace,
+            allow_outside_root=allow_outside_root,
+            follow_symlinks=follow_symlinks,
+        )
     return resolved
 
 
@@ -187,7 +196,14 @@ def _ensure_list(field: str, value: Any) -> list[str]:
     return [str(v) for v in value]
 
 
-def _convert_param_value(spec: ParameterSpec, value: Any, workspace: Path) -> Any:
+def _convert_param_value(
+    spec: ParameterSpec,
+    value: Any,
+    workspace: Path,
+    *,
+    allow_outside_root: bool,
+    follow_symlinks: bool,
+) -> Any:
     if spec.type == "string":
         return str(value)
     if spec.type == "int":
@@ -221,11 +237,22 @@ def _convert_param_value(spec: ParameterSpec, value: Any, workspace: Path) -> An
     if spec.type == "path":
         resolved = Path(value)
         if not resolved.is_absolute():
-            resolved = (workspace / resolved).resolve()
+            candidate = workspace / resolved
+        else:
+            candidate = resolved
+        resolved = candidate.resolve()
         workspace_resolved = workspace.resolve()
-        if not _is_relative_to(resolved, workspace_resolved):
+        if not allow_outside_root and not _is_relative_to(resolved, workspace_resolved):
             raise PlaybookValidationError(
                 f"Parameter '{spec.name}' must resolve within the workspace."
+            )
+        if (
+            not follow_symlinks
+            and candidate.is_relative_to(workspace_resolved)
+            and not _is_relative_to(resolved, workspace_resolved)
+        ):
+            raise PlaybookValidationError(
+                f"Parameter '{spec.name}' escapes the workspace via symlink."
             )
         return str(resolved)
     raise PlaybookValidationError(f"Parameter '{spec.name}' has unsupported type '{spec.type}'.")

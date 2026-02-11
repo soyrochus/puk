@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from puk.app import PukApp, PukConfig
-from puk.config import LLMSettings
+from puk.config import LLMSettings, WorkspaceSettings
 from puk.playbooks import Playbook, PlaybookValidationError, extract_plan_from_text, render_body
 from puk.run import RunRecorder
 
@@ -17,9 +17,10 @@ def run_playbook_sync(
     parameters: dict[str, Any],
     llm: LLMSettings,
     append_to_run: str | None,
+    workspace_settings: WorkspaceSettings,
     argv: list[str],
 ) -> None:
-    _prepare_output_directory(parameters, workspace)
+    _prepare_output_directory(parameters, workspace, workspace_settings)
     recorder = RunRecorder(
         workspace=workspace,
         mode=mode,
@@ -30,6 +31,7 @@ def run_playbook_sync(
     config = PukConfig(
         workspace=str(workspace),
         llm=llm,
+        workspace_settings=workspace_settings,
         allowed_tools=playbook.allowed_tools,
         write_scope=playbook.write_scope,
         execution_mode=mode,
@@ -112,13 +114,35 @@ def _build_prompt(playbook: Playbook, parameters: dict[str, Any], mode: str) -> 
     )
 
 
-def _prepare_output_directory(parameters: dict[str, Any], workspace: Path) -> None:
+def _prepare_output_directory(
+    parameters: dict[str, Any],
+    workspace: Path,
+    workspace_settings: WorkspaceSettings,
+) -> None:
     raw_output_dir = parameters.get("output_dir")
     if not raw_output_dir:
         return
     output_dir = Path(str(raw_output_dir))
     if not output_dir.is_absolute():
-        output_dir = (workspace / output_dir).resolve()
+        candidate = workspace / output_dir
+    else:
+        candidate = output_dir
+    output_dir = candidate.resolve()
+    if (
+        not workspace_settings.allow_outside_root
+        and not output_dir.is_relative_to(workspace.resolve())
+    ):
+        raise PlaybookValidationError(
+            f"output_dir '{output_dir}' must resolve within the workspace."
+        )
+    if (
+        not workspace_settings.follow_symlinks
+        and candidate.is_relative_to(workspace.resolve())
+        and not output_dir.is_relative_to(workspace.resolve())
+    ):
+        raise PlaybookValidationError(
+            f"output_dir '{output_dir}' escapes the workspace via symlink."
+        )
     if output_dir.exists() and not output_dir.is_dir():
         raise PlaybookValidationError(
             f"output_dir '{output_dir}' exists but is not a directory."

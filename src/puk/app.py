@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import fnmatch
 import os
 import re
 import urllib.parse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -19,7 +20,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from puk.config import BYOK_PROVIDERS, LLMSettings
+from puk.config import BYOK_PROVIDERS, LLMSettings, WorkspaceSettings
 from puk.playbooks import is_path_within_scope
 from puk.run import RunRecorder
 from puk import runs as run_inspect
@@ -209,6 +210,7 @@ class Renderer(Protocol):
 class PukConfig:
     workspace: str = "."
     llm: LLMSettings = LLMSettings()
+    workspace_settings: WorkspaceSettings = field(default_factory=WorkspaceSettings)
     allowed_tools: list[str] | None = None
     write_scope: list[str] | None = None
     execution_mode: str | None = None
@@ -581,10 +583,17 @@ class PukApp:
 
         def _read_file(params: _ReadFileParams, _invocation):
             target = self._resolve_workspace_path(params.path)
+            self._assert_read_policy(target)
             if not target.exists():
                 raise FileNotFoundError(f"Path does not exist: {target}")
             if target.is_dir():
                 raise IsADirectoryError(f"Path is a directory: {target}")
+            max_bytes = self.config.workspace_settings.max_file_bytes
+            size = target.stat().st_size
+            if size > max_bytes:
+                raise PermissionError(
+                    f"File '{target}' exceeds max_file_bytes ({size} > {max_bytes})."
+                )
             text = target.read_text(encoding="utf-8")
             if params.start_line is None and params.end_line is None:
                 return text
@@ -599,9 +608,13 @@ class PukApp:
                 raise FileNotFoundError(f"Path does not exist: {target}")
             if not target.is_dir():
                 raise NotADirectoryError(f"Path is not a directory: {target}")
-            entries = (
-                sorted(target.rglob("*")) if params.recursive else sorted(target.iterdir())
-            )[: params.max_entries]
+            if self._is_ignored_path(target):
+                raise PermissionError(f"Path '{target}' is ignored by workspace config.")
+            entries = self._iter_directory_entries(
+                target=target,
+                recursive=params.recursive,
+                max_entries=params.max_entries,
+            )
             workspace = Path(self.config.workspace).resolve()
             lines = []
             for entry in entries:
@@ -661,12 +674,78 @@ class PukApp:
         workspace = Path(self.config.workspace).resolve()
         path = Path(raw_path)
         if not path.is_absolute():
-            path = (workspace / path).resolve()
+            candidate = workspace / path
         else:
-            path = path.resolve()
-        if not path.is_relative_to(workspace):
+            candidate = path
+        resolved = candidate.resolve()
+        if not self.config.workspace_settings.allow_outside_root and not resolved.is_relative_to(
+            workspace
+        ):
             raise PermissionError(f"Path '{raw_path}' is outside the workspace.")
-        return path
+        if (
+            not self.config.workspace_settings.follow_symlinks
+            and candidate.is_relative_to(workspace)
+            and not resolved.is_relative_to(workspace)
+        ):
+            raise PermissionError(f"Path '{raw_path}' escapes the workspace via symlink.")
+        return resolved
+
+    def _assert_read_policy(self, path: Path) -> None:
+        if self._is_ignored_path(path):
+            raise PermissionError(f"Path '{path}' is ignored by workspace config.")
+        if not self._is_allowed_by_globs(path):
+            raise PermissionError(f"Path '{path}' is not allowed by workspace allow/deny globs.")
+
+    def _is_ignored_path(self, path: Path) -> bool:
+        workspace = Path(self.config.workspace).resolve()
+        try:
+            rel = path.relative_to(workspace)
+        except ValueError:
+            return False
+        ignore = set(self.config.workspace_settings.ignore)
+        return any(part in ignore for part in rel.parts)
+
+    def _is_allowed_by_globs(self, path: Path) -> bool:
+        workspace = Path(self.config.workspace).resolve()
+        rel = path.as_posix()
+        try:
+            rel = path.relative_to(workspace).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        deny = self.config.workspace_settings.deny_globs
+        if any(fnmatch.fnmatch(rel, pattern) for pattern in deny):
+            return False
+        allow = self.config.workspace_settings.allow_globs
+        if not allow:
+            return True
+        return any(fnmatch.fnmatch(rel, pattern) for pattern in allow)
+
+    def _iter_directory_entries(
+        self,
+        target: Path,
+        recursive: bool,
+        max_entries: int,
+    ) -> list[Path]:
+        entries: list[Path] = []
+        if not recursive:
+            for entry in sorted(target.iterdir()):
+                if self._is_ignored_path(entry):
+                    continue
+                entries.append(entry)
+                if len(entries) >= max_entries:
+                    break
+            return entries
+        for root, dirs, files in os.walk(target):
+            root_path = Path(root)
+            dirs[:] = [d for d in dirs if not self._is_ignored_path(root_path / d)]
+            for name in sorted(dirs + files):
+                entry = root_path / name
+                if self._is_ignored_path(entry):
+                    continue
+                entries.append(entry)
+                if len(entries) >= max_entries:
+                    return entries
+        return entries
 
     def _assert_write_scope(self, path: Path) -> None:
         if self.config.write_scope is None:

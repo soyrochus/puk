@@ -13,6 +13,14 @@ def test_parser_defaults():
     assert args.provider is None
     assert args.temperature is None
     assert args.max_output_tokens is None
+    assert args.workspace_root is None
+    assert args.workspace_discover_root is None
+    assert args.workspace_allow_outside_root is None
+    assert args.workspace_follow_symlinks is None
+    assert args.workspace_max_file_bytes is None
+    assert args.workspace_ignore is None
+    assert args.workspace_allow_globs is None
+    assert args.workspace_deny_globs is None
     assert args.workspace == "."
 
 
@@ -92,9 +100,15 @@ def test_main_handles_keyboard_interrupt(monkeypatch, capsys):
 def test_run_main_handles_runtime_error_without_traceback(monkeypatch):
     monkeypatch.setattr(main_mod, "resolve_llm_config", lambda workspace, parameters: SimpleNamespace(settings=object()))
     monkeypatch.setattr(main_mod, "log_resolved_llm_config", lambda resolved: None)
+    monkeypatch.setattr(
+        main_mod,
+        "resolve_workspace_config",
+        lambda workspace, parameters: SimpleNamespace(settings=SimpleNamespace(root=str(workspace), allow_outside_root=False, follow_symlinks=False)),
+    )
+    monkeypatch.setattr(main_mod, "log_resolved_workspace_config", lambda resolved: None)
     monkeypatch.setattr(main_mod, "load_playbook", lambda path: SimpleNamespace(parameters={}, run_mode="apply"))
     monkeypatch.setattr(main_mod, "parse_param_assignments", lambda values: {})
-    monkeypatch.setattr(main_mod, "resolve_parameters", lambda specs, raw, workspace: {})
+    monkeypatch.setattr(main_mod, "resolve_parameters", lambda specs, raw, workspace, **kwargs: {})
 
     def _raise_runtime(*args, **kwargs):
         raise RuntimeError("Timeout after 600s waiting for session.idle")
@@ -111,9 +125,15 @@ def test_run_main_handles_runtime_error_without_traceback(monkeypatch):
 def test_run_main_handles_missing_copilot_binary(monkeypatch):
     monkeypatch.setattr(main_mod, "resolve_llm_config", lambda workspace, parameters: SimpleNamespace(settings=object()))
     monkeypatch.setattr(main_mod, "log_resolved_llm_config", lambda resolved: None)
+    monkeypatch.setattr(
+        main_mod,
+        "resolve_workspace_config",
+        lambda workspace, parameters: SimpleNamespace(settings=SimpleNamespace(root=str(workspace), allow_outside_root=False, follow_symlinks=False)),
+    )
+    monkeypatch.setattr(main_mod, "log_resolved_workspace_config", lambda resolved: None)
     monkeypatch.setattr(main_mod, "load_playbook", lambda path: SimpleNamespace(parameters={}, run_mode="apply"))
     monkeypatch.setattr(main_mod, "parse_param_assignments", lambda values: {})
-    monkeypatch.setattr(main_mod, "resolve_parameters", lambda specs, raw, workspace: {})
+    monkeypatch.setattr(main_mod, "resolve_parameters", lambda specs, raw, workspace, **kwargs: {})
 
     def _raise_fnf(*args, **kwargs):
         raise FileNotFoundError(2, "No such file or directory", "copilot")
